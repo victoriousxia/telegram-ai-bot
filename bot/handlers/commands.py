@@ -17,6 +17,7 @@ from bot.services.session import (
     replace_messages_with_summary,
 )
 from bot.services.ai_client import fetch_models, stream_chat, chat_once
+from bot.utils.formatting import markdown_to_html, split_message, TELEGRAM_MAX_LENGTH
 
 
 def _shorten_model_name(model: str) -> str:
@@ -218,17 +219,16 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_response += chunk
             now = time.time()
             if now - last_update >= update_interval:
+                preview = full_response[-TELEGRAM_MAX_LENGTH + 10:] if len(full_response) > TELEGRAM_MAX_LENGTH else full_response
                 try:
-                    await bot_message.edit_text(full_response + " ▍")
+                    await bot_message.edit_text(preview + " ▍")
                 except Exception:
                     pass
                 last_update = now
 
         if full_response:
-            try:
-                await bot_message.edit_text(full_response, parse_mode=ParseMode.MARKDOWN)
-            except Exception:
-                await bot_message.edit_text(full_response)
+            from bot.handlers.chat import _send_formatted
+            await _send_formatted(bot_message, full_response, update.message.chat)
             from bot.services.session import add_message
             await add_message(session_id, "assistant", full_response)
         else:

@@ -15,6 +15,36 @@ from bot.services.session import (
     get_session,
 )
 from bot.services.ai_client import stream_chat
+from bot.utils.formatting import markdown_to_html, split_message, TELEGRAM_MAX_LENGTH
+
+
+async def _send_formatted(bot_message, text, chat=None):
+    """Send final response with HTML formatting, split if too long."""
+    html = markdown_to_html(text)
+    chunks = split_message(html)
+
+    # First chunk: edit the existing "thinking..." message
+    try:
+        await bot_message.edit_text(chunks[0], parse_mode=ParseMode.HTML)
+    except Exception:
+        # HTML parse failed, try plain text
+        plain_chunks = split_message(text)
+        try:
+            await bot_message.edit_text(plain_chunks[0])
+        except Exception:
+            await bot_message.edit_text(plain_chunks[0][:TELEGRAM_MAX_LENGTH])
+        if chat:
+            for chunk in plain_chunks[1:]:
+                await chat.send_message(chunk)
+        return
+
+    # Remaining chunks: send as new messages
+    if chat and len(chunks) > 1:
+        for chunk in chunks[1:]:
+            try:
+                await chat.send_message(chunk, parse_mode=ParseMode.HTML)
+            except Exception:
+                await chat.send_message(chunk)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -45,7 +75,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session and session["title"] == "New Chat":
         title = user_message[:20].strip()
         await set_session_title(session_id, title)
-        # Try to update native topic name
         if user.get("topic_mode") == 1 and update.message.message_thread_id:
             try:
                 await update.effective_chat.edit_forum_topic(
@@ -71,17 +100,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_response += chunk
             now = time.time()
             if now - last_update >= update_interval:
+                # Streaming preview: plain text, truncate if too long
+                preview = full_response[-TELEGRAM_MAX_LENGTH + 10:] if len(full_response) > TELEGRAM_MAX_LENGTH else full_response
                 try:
-                    await bot_message.edit_text(full_response + " ▍")
+                    await bot_message.edit_text(preview + " ▍")
                 except Exception:
                     pass
                 last_update = now
 
         if full_response:
-            try:
-                await bot_message.edit_text(full_response, parse_mode=ParseMode.MARKDOWN)
-            except Exception:
-                await bot_message.edit_text(full_response)
+            await _send_formatted(bot_message, full_response, update.message.chat)
             await add_message(session_id, "assistant", full_response)
         else:
             await bot_message.edit_text("No response from the model.")
