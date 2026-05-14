@@ -10,7 +10,10 @@ from telegram.ext import (
 
 from bot.config import config
 from bot.database.models import init_db
-from bot.handlers.commands import start_command, new_command, model_command, model_callback
+from bot.handlers.commands import (
+    start_command, new_command, model_command,
+    model_callback, provider_callback, setmodel_callback,
+)
 from bot.handlers.chat import handle_message
 
 logging.basicConfig(
@@ -52,6 +55,8 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("new", new_command))
     app.add_handler(CommandHandler("model", model_command))
+    app.add_handler(CallbackQueryHandler(provider_callback, pattern=r"^provider:"))
+    app.add_handler(CallbackQueryHandler(setmodel_callback, pattern=r"^setmodel:"))
     app.add_handler(CallbackQueryHandler(model_callback, pattern=r"^model:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

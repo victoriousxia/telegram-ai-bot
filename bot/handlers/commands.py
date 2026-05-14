@@ -7,6 +7,7 @@ from bot.services.session import (
     create_session,
     set_user_model,
 )
+from bot.services.ai_client import fetch_models
 
 
 async def check_access(update: Update) -> bool:
@@ -49,35 +50,95 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = await get_or_create_user(update.effective_user.id)
+    text, markup = _build_provider_selection(user["current_model"])
+    await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+
+
+def _build_provider_selection(current_model: str):
+    """Step 1: show provider list."""
     buttons = []
-
-    for provider in config.providers.values():
-        buttons.append([
-            InlineKeyboardButton(
-                f"── {provider.name} ({provider.api_type}) ──",
-                callback_data="model:noop",
-            )
-        ])
-        row = []
-        for model in provider.models:
-            label = f"✓ {model}" if model == user["current_model"] else model
-            row.append(InlineKeyboardButton(label, callback_data=f"model:{model}"))
-            if len(row) == 2:
-                buttons.append(row)
-                row = []
-        if row:
-            buttons.append(row)
-
+    for name, provider in config.providers.items():
+        label = f"{provider.name} ({len(provider.models)})"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"provider:{name}")])
     buttons.append([InlineKeyboardButton("Cancel", callback_data="model:cancel")])
 
-    await update.message.reply_text(
-        f"Current model: `{user['current_model']}`\n\nSelect a model:",
-        reply_markup=InlineKeyboardMarkup(buttons),
+    text = (
+        f"Current model: `{current_model}`\n\n"
+        f"Select provider:"
+    )
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def _build_model_selection(provider_name: str, current_model: str):
+    """Step 2: show models for a specific provider."""
+    provider = config.providers[provider_name]
+    buttons = []
+    row = []
+    for model in provider.models:
+        label = f"✓ {model}" if model == current_model else model
+        row.append(InlineKeyboardButton(label, callback_data=f"setmodel:{model}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton("« Back", callback_data="provider:back"),
+        InlineKeyboardButton("Cancel", callback_data="model:cancel"),
+    ])
+
+    text = (
+        f"Current model: `{current_model}`\n"
+        f"Provider: *{provider.name}*\n\n"
+        f"Select model:"
+    )
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def provider_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle provider selection (step 1 -> step 2)."""
+    query = update.callback_query
+
+    data = query.data.removeprefix("provider:")
+
+    if data == "back":
+        await query.answer()
+        user = await get_or_create_user(query.from_user.id)
+        text, markup = _build_provider_selection(user["current_model"])
+        await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+        return
+
+    provider_name = data
+    provider = config.providers.get(provider_name)
+    if not provider:
+        await query.answer("Provider not found.", show_alert=True)
+        return
+
+    # Show loading state
+    await query.answer()
+    await query.edit_message_text(
+        f"Loading models from *{provider.name}*...",
         parse_mode="Markdown",
     )
 
+    # Refresh models if empty
+    if not provider.models:
+        try:
+            provider.models = await fetch_models(provider)
+        except Exception:
+            await query.edit_message_text(
+                f"Failed to fetch models from {provider.name}.",
+            )
+            return
+
+    user = await get_or_create_user(query.from_user.id)
+    text, markup = _build_model_selection(provider_name, user["current_model"])
+    await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+
 
 async def model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle model selection (step 2 confirm) or cancel."""
     query = update.callback_query
     await query.answer()
 
@@ -85,11 +146,16 @@ async def model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "cancel":
         await query.edit_message_text("Model selection cancelled.")
         return
-    if data == "noop":
-        return
 
-    await set_user_model(query.from_user.id, data)
+
+async def setmodel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle final model selection."""
+    query = update.callback_query
+    await query.answer()
+
+    model = query.data.removeprefix("setmodel:")
+    await set_user_model(query.from_user.id, model)
     await query.edit_message_text(
-        f"Model switched to `{data}`.\n\nNew messages will use this model.",
+        f"Model switched to `{model}`.",
         parse_mode="Markdown",
     )
