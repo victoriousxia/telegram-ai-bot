@@ -167,6 +167,9 @@ async def delete_last_exchange(session_id: int) -> bool:
         rows = await cursor.fetchall()
         if len(rows) < 2:
             return False
+        # Verify it's actually an assistant+user pair (newest first)
+        if rows[0]["role"] != "assistant" or rows[1]["role"] != "user":
+            return False
         ids = [row["id"] for row in rows]
         await db.execute(
             f"DELETE FROM messages WHERE id IN ({','.join('?' * len(ids))})", ids
@@ -209,12 +212,12 @@ async def get_last_user_message(session_id: int) -> str | None:
         await db.close()
 
 
-async def set_user_topic_mode(user_id: int, enabled: bool):
+async def set_user_topic_mode(user_id: int, mode: int):
     db = await get_db()
     try:
         await db.execute(
             "UPDATE users SET topic_mode = ? WHERE telegram_id = ?",
-            (1 if enabled else 0, user_id),
+            (mode, user_id),
         )
         await db.commit()
     finally:

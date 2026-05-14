@@ -198,6 +198,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No message to retry.")
         return
 
+    # Only delete if there's actually an assistant message to remove
     await delete_last_assistant_message(session_id)
 
     await update.message.chat.send_action(ChatAction.TYPING)
@@ -207,6 +208,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_response = ""
     last_update = time.time()
     update_interval = config.STREAM_UPDATE_INTERVAL
+    context.user_data["stop_flag"] = False
 
     try:
         async for chunk in stream_chat(messages, model):
@@ -300,7 +302,7 @@ async def compress_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(ChatAction.TYPING)
 
     conversation_text = "\n".join(
-        f"{m['role']}: {m['content']}" for m in messages if m["role"] != "system"
+        f"{m['role']}: {m['content']}" for m in messages
     )
     compress_messages = [
         {"role": "user", "content": (

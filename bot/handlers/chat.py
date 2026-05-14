@@ -29,8 +29,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session_id = user["current_session_id"]
     model = user["current_model"]
 
-    # Topic routing: if in topic mode and message has thread_id, find matching session
-    if user.get("topic_mode") and update.message.message_thread_id:
+    # Topic routing: in native topic mode (1), route by thread_id
+    if user.get("topic_mode") == 1 and update.message.message_thread_id:
         thread_session = await get_session_by_thread(
             update.effective_user.id, update.message.message_thread_id
         )
@@ -46,7 +46,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = user_message[:20].strip()
         await set_session_title(session_id, title)
         # Try to update native topic name
-        if user.get("topic_mode") and update.message.message_thread_id:
+        if user.get("topic_mode") == 1 and update.message.message_thread_id:
             try:
                 await update.effective_chat.edit_forum_topic(
                     message_thread_id=update.message.message_thread_id,

@@ -23,14 +23,15 @@ async def topic_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = await get_or_create_user(update.effective_user.id)
 
+    # Already in topic mode — show list
     if user.get("topic_mode"):
         await _show_topic_list(update, user)
         return
 
-    # Try to enable native forum topics
+    # Try to enable native forum topics (topic_mode=1)
     try:
         topic = await update.effective_chat.create_forum_topic("New Chat")
-        await set_user_topic_mode(update.effective_user.id, True)
+        await set_user_topic_mode(update.effective_user.id, 1)
         await set_session_topic_thread(user["current_session_id"], topic.message_thread_id)
         await update.message.reply_text(
             "Topic mode enabled! Each conversation will appear as a separate topic.\n"
@@ -38,8 +39,9 @@ async def topic_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         logger.info(f"Native topic mode enabled for user {update.effective_user.id}")
     except (BadRequest, Exception) as e:
+        # Fallback to inline keyboard mode (topic_mode=2)
         logger.info(f"Native topics not supported, using inline mode: {e}")
-        await set_user_topic_mode(update.effective_user.id, True)
+        await set_user_topic_mode(update.effective_user.id, 2)
         await _show_topic_list(update, user)
 
 
@@ -81,8 +83,8 @@ async def topic_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = await get_or_create_user(query.from_user.id)
     model = user["current_model"]
 
-    # Try native topic creation if supported
-    if user.get("topic_mode"):
+    # Try native topic creation only in native mode (topic_mode=1)
+    if user.get("topic_mode") == 1:
         try:
             topic = await query.message.chat.create_forum_topic("New Chat")
             session_id = await create_session(query.from_user.id, model)
