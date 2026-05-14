@@ -5,7 +5,7 @@
 
 set -e
 
-REPO_URL="${REPO_URL:-https://github.com/YOUR_USERNAME/telegram-ai-bot.git}"
+REPO_URL="${REPO_URL:-https://github.com/victoriousxia/telegram-ai-bot.git}"
 INSTALL_DIR="${INSTALL_DIR:-/vol1/docker/telegram-ai-bot}"
 
 echo "=== Telegram AI Bot 部署脚本 ==="
