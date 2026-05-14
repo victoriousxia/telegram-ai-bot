@@ -11,16 +11,10 @@ from bot.services.ai_client import fetch_models
 
 
 def _shorten_model_name(model: str) -> str:
-    """Shorten model name for compact button display."""
+    """Remove claude- prefix only."""
     name = model
-    for prefix in ("claude-", "openai/", "anthropic/", "google/", "meta/"):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-            break
-    if len(name) > 18:
-        parts = name.split("-")
-        if len(parts) >= 3:
-            name = "-".join(parts[-3:])
+    if name.startswith("claude-"):
+        name = name[len("claude-"):]
     return name
 
 
@@ -92,7 +86,7 @@ def _build_model_selection(provider_name: str, current_model: str):
         short = _shorten_model_name(model)
         label = f"✓ {short}" if model == current_model else short
         row.append(InlineKeyboardButton(label, callback_data=f"setmodel:{model}"))
-        if len(row) == 3:
+        if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
