@@ -10,6 +10,20 @@ from bot.services.session import (
 from bot.services.ai_client import fetch_models
 
 
+def _shorten_model_name(model: str) -> str:
+    """Shorten model name for compact button display."""
+    name = model
+    for prefix in ("claude-", "openai/", "anthropic/", "google/", "meta/"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    if len(name) > 18:
+        parts = name.split("-")
+        if len(parts) >= 3:
+            name = "-".join(parts[-3:])
+    return name
+
+
 async def check_access(update: Update) -> bool:
     if config.ALLOWED_USER_IDS is None:
         return True
@@ -75,9 +89,10 @@ def _build_model_selection(provider_name: str, current_model: str):
     buttons = []
     row = []
     for model in provider.models:
-        label = f"✓ {model}" if model == current_model else model
+        short = _shorten_model_name(model)
+        label = f"✓ {short}" if model == current_model else short
         row.append(InlineKeyboardButton(label, callback_data=f"setmodel:{model}"))
-        if len(row) == 2:
+        if len(row) == 3:
             buttons.append(row)
             row = []
     if row:
