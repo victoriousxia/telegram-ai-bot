@@ -42,8 +42,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/victoriousxia/telegram-ai-bot
 
 ```bash
 # 克隆
-git clone https://github.com/victoriousxia/telegram-ai-bot.git /vol1/docker/telegram-ai-bot
-cd /vol1/docker/telegram-ai-bot
+git clone https://github.com/victoriousxia/telegram-ai-bot.git /vol2/docker/telegram-ai-bot
+cd /vol2/docker/telegram-ai-bot
 
 # 配置
 cp config.example.env .env
