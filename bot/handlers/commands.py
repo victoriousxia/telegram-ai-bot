@@ -219,7 +219,10 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_response += chunk
             now = time.time()
             if now - last_update >= update_interval:
-                preview = full_response[-TELEGRAM_MAX_LENGTH + 10:] if len(full_response) > TELEGRAM_MAX_LENGTH else full_response
+                if len(full_response) > TELEGRAM_MAX_LENGTH:
+                    preview = "… " + full_response[-TELEGRAM_MAX_LENGTH + 12:]
+                else:
+                    preview = full_response
                 try:
                     await bot_message.edit_text(preview + " ▍")
                 except Exception:
