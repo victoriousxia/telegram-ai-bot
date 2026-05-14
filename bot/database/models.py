@@ -49,5 +49,17 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
         """)
         await db.commit()
+
+        # Migrations for new fields
+        migrations = [
+            "ALTER TABLE sessions ADD COLUMN topic_thread_id INTEGER",
+            "ALTER TABLE users ADD COLUMN topic_mode INTEGER DEFAULT 0",
+        ]
+        for sql in migrations:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass
+        await db.commit()
     finally:
         await db.close()

@@ -62,6 +62,34 @@ async def _stream_openai(messages: list[dict], model: str, provider: Provider):
             yield chunk.choices[0].delta.content
 
 
+async def chat_once(messages: list[dict], model: str) -> str:
+    """Non-streaming single response for internal use (compress, etc.)."""
+    provider = config.get_provider_for_model(model)
+    if not provider:
+        raise ValueError(f"No provider found for model: {model}")
+
+    if provider.api_type == "openai":
+        client = _get_openai_client(provider)
+        resp = await client.chat.completions.create(model=model, messages=messages)
+        return resp.choices[0].message.content or ""
+    elif provider.api_type == "anthropic":
+        client = _get_anthropic_client(provider)
+        system_prompt = None
+        api_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_prompt = msg["content"]
+            else:
+                api_messages.append({"role": msg["role"], "content": msg["content"]})
+        kwargs = {"model": model, "messages": api_messages, "max_tokens": 4096}
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        resp = await client.messages.create(**kwargs)
+        return resp.content[0].text if resp.content else ""
+    else:
+        raise ValueError(f"Unknown api_type: {provider.api_type}")
+
+
 async def _stream_anthropic(messages: list[dict], model: str, provider: Provider):
     client = _get_anthropic_client(provider)
 

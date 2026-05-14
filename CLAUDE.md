@@ -20,13 +20,14 @@ bot/
 ├── main.py              # 入口，注册 handler，启动时拉取模型
 ├── config.py            # 环境变量解析，Provider 数据结构
 ├── handlers/
-│   ├── commands.py      # /start, /new, /model（两步选择 + inline keyboard）
-│   └── chat.py          # 文本消息处理，流式回复
+│   ├── commands.py      # /start, /new, /model, /retry, /undo, /title, /stop, /compress
+│   ├── topic.py         # /topic 管理（原生 Topics + inline keyboard 降级）
+│   └── chat.py          # 文本消息处理，流式回复，topic 路由，自动标题
 ├── services/
-│   ├── ai_client.py     # 双格式 API 调用（OpenAI / Anthropic）+ fetch_models
-│   └── session.py       # 会话 CRUD，消息存取
+│   ├── ai_client.py     # 双格式 API 调用（OpenAI / Anthropic）+ fetch_models + chat_once
+│   └── session.py       # 会话 CRUD，消息存取，topic 管理
 └── database/
-    └── models.py        # SQLite schema 定义 + init_db()
+    └── models.py        # SQLite schema 定义 + init_db() + 迁移
 ```
 
 ## 架构要点
@@ -78,7 +79,7 @@ git pull origin main
 sudo docker compose up -d --build
 ```
 
-## 当前状态（v1 已完成并部署）
+## 当前状态（v2 Topic + 命令扩展）
 
 - [x] /start, /new, /model 命令
 - [x] 流式对话
@@ -88,15 +89,20 @@ sudo docker compose up -d --build
 - [x] 模型名去 claude- 前缀，两列紧凑布局
 - [x] Docker Compose 部署到飞牛 NAS
 - [x] 一键部署脚本 + README 文档
+- [x] /topic 管理：优先原生 Topics，降级为 inline keyboard 会话列表
+- [x] /retry 重新生成最后一条回复
+- [x] /undo 撤销最后一组消息
+- [x] /title 设置会话标题（同步更新 topic 名称）
+- [x] /stop 中断生成
+- [x] /compress 上下文压缩（AI 总结 → system 消息）
+- [x] 自动标题：首条消息自动设为会话标题
 
 ## 后续功能（TODO）
 
-- [ ] Topic 管理：多会话侧边栏切换、重命名、删除
-- [ ] /retry 重新生成最后一条回复
-- [ ] /undo 撤销最后一条消息
-- [ ] /title 设置会话标题
-- [ ] /stop 中断生成
-- [ ] /compress 上下文压缩（长对话摘要）
+- [ ] Topic 删除功能
+- [ ] /branch 从当前会话分叉
+- [ ] 图片/文件消息支持
+- [ ] 多轮对话 token 计数显示
 
 ## 注意事项
 

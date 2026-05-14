@@ -10,6 +10,9 @@ from bot.services.session import (
     get_or_create_user,
     add_message,
     get_session_messages,
+    get_session_by_thread,
+    set_session_title,
+    get_session,
 )
 from bot.services.ai_client import stream_chat
 
@@ -26,20 +29,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session_id = user["current_session_id"]
     model = user["current_model"]
 
-    await update.message.chat.send_action(ChatAction.TYPING)
+    # Topic routing: if in topic mode and message has thread_id, find matching session
+    if user.get("topic_mode") and update.message.message_thread_id:
+        thread_session = await get_session_by_thread(
+            update.effective_user.id, update.message.message_thread_id
+        )
+        if thread_session:
+            session_id = thread_session["id"]
 
+    await update.message.chat.send_action(ChatAction.TYPING)
     await add_message(session_id, "user", user_message)
 
-    messages = await get_session_messages(session_id)
+    # Auto-title: set title from first user message
+    session = await get_session(session_id)
+    if session and session["title"] == "New Chat":
+        title = user_message[:20].strip()
+        await set_session_title(session_id, title)
+        # Try to update native topic name
+        if user.get("topic_mode") and update.message.message_thread_id:
+            try:
+                await update.effective_chat.edit_forum_topic(
+                    message_thread_id=update.message.message_thread_id,
+                    name=title,
+                )
+            except Exception:
+                pass
 
+    messages = await get_session_messages(session_id)
     bot_message = await update.message.reply_text("thinking...")
 
     full_response = ""
     last_update = time.time()
     update_interval = config.STREAM_UPDATE_INTERVAL
+    context.user_data["stop_flag"] = False
 
     try:
         async for chunk in stream_chat(messages, model):
+            if context.user_data.get("stop_flag"):
+                context.user_data["stop_flag"] = False
+                break
             full_response += chunk
             now = time.time()
             if now - last_update >= update_interval:
