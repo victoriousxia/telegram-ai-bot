@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.env
+*.db
+.venv/
+venv/
+.git/
+.gitignore
+*.md
+config.example.env

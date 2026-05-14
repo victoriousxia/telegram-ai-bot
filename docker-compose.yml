@@ -1,0 +1,14 @@
+services:
+  bot:
+    build: .
+    container_name: telegram-ai-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - bot-data:/data
+    environment:
+      - DB_PATH=/data/bot.db
+
+volumes:
+  bot-data:
