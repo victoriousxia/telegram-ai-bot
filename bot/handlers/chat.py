@@ -19,11 +19,11 @@ from bot.utils.telegram import stream_and_send
 
 logger = logging.getLogger(__name__)
 
-TITLE_MAX_LEN = 20
+TITLE_MAX_LEN = 10
 TITLE_PLACEHOLDER = "..."
 TITLE_PROMPT = (
-    f"根据以下对话内容，生成一个简短的中文标题（不超过{TITLE_MAX_LEN}个字符）。"
-    "标题应概括对话主题，不要加引号或标点。只输出标题本身：\n\n"
+    f"用{TITLE_MAX_LEN}字以内概括这段对话的主题，越短越好。"
+    "不要加引号或标点，只输出标题：\n\n"
 )
 
 
