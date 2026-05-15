@@ -92,8 +92,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Auto-title: generate AI title after first response
     session = await get_session(session_id)
-    if session and session["title"] == "New Chat":
-        # Use truncated message as placeholder — meaningful even if AI generation is slow
+    needs_title = session and (
+        session["title"] == "New Chat"
+        or session["title"].startswith("/")
+    )
+    if needs_title:
         placeholder = user_message[:TITLE_MAX_LEN].strip() or "Chat"
         await set_session_title(session_id, placeholder)
         context.application.create_task(
@@ -104,4 +107,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user.get("topic_mode"),
             ),
             update=update,
+        )
+    else:
+        logger.debug(
+            f"Auto-title skipped: session_id={session_id}, "
+            f"title={session['title'] if session else 'N/A'}"
         )
