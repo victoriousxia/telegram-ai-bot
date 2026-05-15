@@ -4,7 +4,10 @@ TELEGRAM_MAX_LENGTH = 4096
 
 
 def markdown_to_html(text: str) -> str:
-    """Convert standard Markdown to Telegram-compatible HTML."""
+    """Convert standard Markdown to Telegram-compatible HTML.
+    Known limitation: nested inline formatting (e.g. ***bold italic***) is not
+    reliably supported — only single-level bold/italic is converted.
+    """
     lines = text.split("\n")
     result = []
     in_code_block = False
@@ -69,9 +72,29 @@ def _convert_inline(line: str) -> str:
 
 
 def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]:
-    """Split text into chunks that fit Telegram's message limit."""
+    """Split text into chunks that fit Telegram's message limit.
+    Respects code block boundaries — never splits inside a ``` block.
+    """
     if len(text) <= max_length:
         return [text]
+
+    # Identify code block regions to avoid splitting inside them
+    code_block_ranges = []
+    for m in re.finditer(r"^```.*$", text, re.MULTILINE):
+        code_block_ranges.append(m.start())
+
+    # Pair up opening/closing ``` markers
+    code_regions = []
+    i = 0
+    while i + 1 < len(code_block_ranges):
+        code_regions.append((code_block_ranges[i], code_block_ranges[i + 1]))
+        i += 2
+
+    def _in_code_block(pos: int) -> bool:
+        for start, end in code_regions:
+            if start < pos < end:
+                return True
+        return False
 
     chunks = []
     while text:
@@ -79,11 +102,21 @@ def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]
             chunks.append(text)
             break
 
-        # Find a good split point: prefer paragraph break, then line break
-        split_at = text.rfind("\n\n", 0, max_length)
-        if split_at == -1 or split_at < max_length // 2:
-            split_at = text.rfind("\n", 0, max_length)
-        if split_at == -1 or split_at < max_length // 2:
+        # Try paragraph break, then line break, avoiding code block inters
+        split_at = -1
+        for sep in ("\n\n", "\n"):
+            candidate = text.rfind(sep, 0, max_length)
+            while candidate > max_length // 4:
+                # Calculate absolute position to check code block membership
+                abs_pos = sum(len(c) for c in chunks) + candidate
+                if not _in_code_block(abs_pos):
+                    split_at = candidate
+                    break
+                candidate = text.rfind(sep, 0, candidate)
+            if split_at > 0:
+                break
+
+        if split_at <= 0:
             split_at = max_length
 
         chunks.append(text[:split_at])
