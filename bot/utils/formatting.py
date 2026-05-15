@@ -31,7 +31,7 @@ def markdown_to_html(text: str) -> str:
         # Headers → bold
         header_match = re.match(r"^(#{1,3})\s+(.+)$", line)
         if header_match:
-            result.append(f"\n<b>{_escape_html(header_match.group(2))}</b>")
+            result.append(f"\n<b>{_convert_inline(header_match.group(2))}</b>")
             continue
 
         # Unordered list items: "* text" or "- text" → "• text" (skip inline conversion for the marker)
@@ -94,10 +94,13 @@ def _convert_inline(line: str) -> str:
 def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]:
     """Split text into chunks that fit Telegram's message limit.
     Respects code block boundaries — never splits inside a ``` block.
-    Uses a segment-based approach: first splits text into code/non-code segments,
-    then only subdivides non-code segments when they exceed max_length.
+    Uses a conservative threshold (3600) to account for HTML tag expansion
+    when the chunks are later converted via markdown_to_html.
     """
-    if len(text) <= max_length:
+    # Conservative limit: HTML tags like <b>, <code>, <a href="..."> expand length
+    effective_limit = min(max_length, 3600)
+
+    if len(text) <= effective_limit:
         return [text]
 
     # Split by lines, group into chunks respecting code blocks
@@ -114,7 +117,7 @@ def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]
             in_code = not in_code
 
         # If adding this line would exceed limit and we're not in a code block
-        if current_len + line_len > max_length and not in_code and current_chunk:
+        if current_len + line_len > effective_limit and not in_code and current_chunk:
             chunks.append("\n".join(current_chunk))
             current_chunk = []
             current_len = 0
@@ -125,10 +128,10 @@ def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]
     if current_chunk:
         chunks.append("\n".join(current_chunk))
 
-    # If any chunk still exceeds max_length (e.g. a huge code block), force-split it
+    # If any chunk still exceeds effective_limit (e.g. a huge code block), force-split it
     final_chunks = []
     for chunk in chunks:
-        if len(chunk) <= max_length:
+        if len(chunk) <= effective_limit:
             final_chunks.append(chunk)
         else:
             # Force split at line boundaries
@@ -136,7 +139,7 @@ def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]
             sub_chunk = []
             sub_len = 0
             for line in sub_lines:
-                if sub_len + len(line) + 1 > max_length and sub_chunk:
+                if sub_len + len(line) + 1 > effective_limit and sub_chunk:
                     final_chunks.append("\n".join(sub_chunk))
                     sub_chunk = []
                     sub_len = 0

@@ -47,18 +47,16 @@ async def send_formatted(bot_message, text, chat=None):
         try:
             truncated = markdown_to_html(chunks[0])
             notice = "\n\n[… message truncated]"
-            await bot_message.edit_text(
-                truncated + notice,
-                parse_mode=ParseMode.HTML,
-            )
+            combined = truncated + notice
+            if len(combined) > TELEGRAM_MAX_LENGTH:
+                combined = truncated[:TELEGRAM_MAX_LENGTH - len(notice)] + notice
+            await bot_message.edit_text(combined, parse_mode=ParseMode.HTML)
         except BadRequest:
             pass
 
 
 async def stream_and_send(stream, bot_message, chat, context, session_id):
-    """Shared streaming loop: stream chunks, update preview, send final formatted.
-    Returns the full response text, or empty string if nothing was generated.
-    """
+    """Shared streaming loop: stream chunks, update preview, send final formatted."""
     from bot.services.session import add_message
 
     full_response = ""
@@ -93,5 +91,3 @@ async def stream_and_send(stream, bot_message, chat, context, session_id):
     except Exception as e:
         error_msg = f"Error: {type(e).__name__}: {str(e)[:200]}"
         await bot_message.edit_text(error_msg)
-
-    return full_response
