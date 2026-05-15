@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 TELEGRAM_MAX_LENGTH = 4096
 
@@ -12,8 +13,16 @@ def markdown_to_html(text: str) -> str:
     result = []
     in_code_block = False
     code_block_lines = []
+    table_lines = []
 
     for line in lines:
+        # Flush accumulated table when we hit a non-table line
+        if table_lines and not re.match(r"^\s*\|", line):
+            rendered = _render_table(table_lines)
+            if rendered:
+                result.append(rendered)
+            table_lines = []
+
         if line.strip().startswith("```"):
             if in_code_block:
                 code_content = "\n".join(code_block_lines)
@@ -28,10 +37,16 @@ def markdown_to_html(text: str) -> str:
             code_block_lines.append(line)
             continue
 
-        # Headers → bold
+        # Table rows: lines starting with |
+        if re.match(r"^\s*\|", line):
+            table_lines.append(line)
+            continue
+
+        # Headers → bold (only add extra newline if previous line isn't blank)
         header_match = re.match(r"^(#{1,3})\s+(.+)$", line)
         if header_match:
-            result.append(f"\n<b>{_convert_inline(header_match.group(2))}</b>")
+            prefix = "\n" if result and result[-1] != "" else ""
+            result.append(f"{prefix}<b>{_convert_inline(header_match.group(2))}</b>")
             continue
 
         # Unordered list items: "* text" or "- text" → "• text" (skip inline conversion for the marker)
@@ -46,12 +61,63 @@ def markdown_to_html(text: str) -> str:
         line = _convert_inline(line)
         result.append(line)
 
+    # Flush remaining table
+    if table_lines:
+        rendered = _render_table(table_lines)
+        if rendered:
+            result.append(rendered)
+
     # Unclosed code block
     if in_code_block and code_block_lines:
         code_content = "\n".join(code_block_lines)
         result.append(f"<pre>{_escape_html(code_content)}</pre>")
 
     return "\n".join(result).strip()
+
+
+def _render_table(table_lines: list[str]) -> str:
+    """Convert markdown table lines to a <pre> block for monospace alignment."""
+    rows = []
+    for line in table_lines:
+        stripped = line.strip().strip("|")
+        cells = [c.strip() for c in stripped.split("|")]
+        if all(re.match(r"^[-:]+$", c) for c in cells if c):
+            continue
+        rows.append(cells)
+
+    if not rows:
+        return ""
+
+    col_count = max(len(r) for r in rows)
+    col_widths = [0] * col_count
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < col_count:
+                col_widths[i] = max(col_widths[i], _display_width(cell))
+
+    formatted = []
+    for idx, row in enumerate(rows):
+        padded = []
+        for i in range(col_count):
+            cell = row[i] if i < len(row) else ""
+            pad = col_widths[i] - _display_width(cell)
+            padded.append(cell + " " * pad)
+        formatted.append("  ".join(padded))
+        if idx == 0 and len(rows) > 1:
+            formatted.append("  ".join("-" * w for w in col_widths))
+
+    return f"<pre>{_escape_html(chr(10).join(formatted))}</pre>"
+
+
+def _display_width(text: str) -> int:
+    """Calculate display width accounting for wide (CJK) characters."""
+    width = 0
+    for ch in text:
+        if unicodedata.east_asian_width(ch) in ("W", "F"):
+            width += 2
+        else:
+            width += 1
+    return width
 
 
 def _escape_html(text: str) -> str:
