@@ -2,6 +2,7 @@
 import time
 
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 
 from bot.config import config
 from bot.utils.formatting import markdown_to_html, split_message, TELEGRAM_MAX_LENGTH
@@ -14,38 +15,43 @@ async def send_formatted(bot_message, text, chat=None):
     """Send final response with HTML formatting, split if too long.
     Splits raw Markdown first, then converts each chunk to HTML separately
     to avoid cutting HTML tags in half.
-    If chat is None and message is multi-chunk, appends truncation notice.
+    Passes message_thread_id from bot_message to subsequent messages for topic support.
     """
     chunks = split_message(text)
+    thread_id = getattr(bot_message, "message_thread_id", None)
 
     for i, chunk in enumerate(chunks):
         html = markdown_to_html(chunk)
         if i == 0:
             try:
                 await bot_message.edit_text(html, parse_mode=ParseMode.HTML)
-            except Exception:
+            except BadRequest:
                 try:
                     await bot_message.edit_text(chunk)
-                except Exception:
+                except BadRequest:
                     await bot_message.edit_text(chunk[:TELEGRAM_MAX_LENGTH])
         else:
             if chat:
+                kwargs = {}
+                if thread_id:
+                    kwargs["message_thread_id"] = thread_id
                 try:
-                    await chat.send_message(html, parse_mode=ParseMode.HTML)
-                except Exception:
-                    await chat.send_message(chunk)
+                    await chat.send_message(html, parse_mode=ParseMode.HTML, **kwargs)
+                except BadRequest:
+                    await chat.send_message(chunk, **kwargs)
             else:
                 break
 
     # No chat object but multiple chunks — notify user of truncation
     if not chat and len(chunks) > 1:
         try:
+            truncated = markdown_to_html(chunks[0])
             notice = "\n\n[… message truncated]"
             await bot_message.edit_text(
-                markdown_to_html(chunks[0]) + notice,
+                truncated + notice,
                 parse_mode=ParseMode.HTML,
             )
-        except Exception:
+        except BadRequest:
             pass
 
 

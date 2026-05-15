@@ -14,7 +14,6 @@ def markdown_to_html(text: str) -> str:
     code_block_lines = []
 
     for line in lines:
-        # Code block toggle
         if line.strip().startswith("```"):
             if in_code_block:
                 code_content = "\n".join(code_block_lines)
@@ -35,7 +34,15 @@ def markdown_to_html(text: str) -> str:
             result.append(f"\n<b>{_escape_html(header_match.group(2))}</b>")
             continue
 
-        # Inline formatting
+        # Unordered list items: "* text" or "- text" → "• text" (skip inline conversion for the marker)
+        list_match = re.match(r"^(\s*)[*\-]\s+(.+)$", line)
+        if list_match:
+            indent = list_match.group(1)
+            content = _convert_inline(list_match.group(2))
+            result.append(f"{_escape_html(indent)}• {content}")
+            continue
+
+        # Regular line: inline formatting
         line = _convert_inline(line)
         result.append(line)
 
@@ -53,73 +60,109 @@ def _escape_html(text: str) -> str:
 
 
 def _convert_inline(line: str) -> str:
-    """Convert inline Markdown to HTML, preserving code spans."""
-    parts = re.split(r"(`[^`]+`)", line)
+    """Convert inline MarML, preserving code spans and links."""
+    # Split on code spans and links to protect them from other transformations
+    parts = re.split(r"(`[^`]+`|\[([^\]]+)\]\(([^)]+)\))", line)
     converted = []
-    for part in parts:
-        if part.startswith("`") and part.endswith("`"):
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        if part is None:
+            i += 1
+            continue
+        if part.startswith("`") and part.endswith("`") and len(part) > 1:
             converted.append(f"<code>{_escape_html(part[1:-1])}</code>")
+        elif part.startswith("[") and "](" in part:
+            # Markdown link [text](url)
+            m = re.match(r"\[([^\]]+)\]\(([^)]+)\)", part)
+            if m:
+                link_text = _escape_html(m.group(1))
+                url = _escape_html(m.group(2))
+                converted.append(f'<a href="{url}">{link_text}</a>')
+            else:
+                converted.append(_escape_html(part))
         else:
             text = _escape_html(part)
             # Bold: **text** or __text__
             text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
             text = re.sub(r"__(.+?)__", r"<b>\1</b>", text)
-            # Italic: *text* or _text_ (but not inside words)
+            # Italic: *text* or _text_ (not at line start to avoid list confusion)
             text = re.sub(r"(?<!\w)\*(.+?)\*(?!\w)", r"<i>\1</i>", text)
             text = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"<i>\1</i>", text)
             converted.append(text)
+        i += 1
     return "".join(converted)
 
 
 def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]:
     """Split text into chunks that fit Telegram's message limit.
     Respects code block boundaries — never splits inside a ``` block.
+    Uses a segment-based approach: first splits text into code/non-code segments,
+    then only subdivides non-code segments when they exceed max_length.
     """
     if len(text) <= max_length:
         return [text]
 
-    # Identify code block regions to avoid splitting inside them
-    code_block_ranges = []
+    # Build segments: alternating (text, is_code) tuples
+    segments = []
+    current_pos = 0
     for m in re.finditer(r"^```.*$", text, re.MULTILINE):
-        code_block_ranges.append(m.start())
+        if current_pos < m.start():
+            segments.append((text[current_pos:m.start()], False))
+        current_pos = m.start()
 
-    # Pair up opening/closing ``` markers
-    code_regions = []
+    # Pair up code blocks
+    code_starts = [m.start() for m in re.finditer(r"^```.*$", text, re.MULTILINE)]
+    paired = set()
     i = 0
-    while i + 1 < len(code_block_ranges):
-        code_regions.append((code_block_ranges[i], code_block_ranges[i + 1]))
+    while i + 1 < len(code_starts):
+        paired.add(code_starts[i])
+        paired.add(code_starts[i + 1])
         i += 2
 
-    def _in_code_block(pos: int) -> bool:
-        for start, end in code_regions:
-            if start < pos < end:
-                return True
-        return False
-
+    # Simpler approach: split by lines, group into chunks respecting code blocks
+    lines = text.split("\n")
     chunks = []
-    while text:
-        if len(text) <= max_length:
-            chunks.append(text)
-            break
+    current_chunk = []
+    current_len = 0
+    in_code = False
 
-        # Try paragraph break, then line break, avoiding code block inters
-        split_at = -1
-        for sep in ("\n\n", "\n"):
-            candidate = text.rfind(sep, 0, max_length)
-            while candidate > max_length // 4:
-                # Calculate absolute position to check code block membership
-                abs_pos = sum(len(c) for c in chunks) + candidate
-                if not _in_code_block(abs_pos):
-                    split_at = candidate
-                    break
-                candidate = text.rfind(sep, 0, candidate)
-            if split_at > 0:
-                break
+    for line in lines:
+        line_len = len(line) + 1  # +1 for the \n
 
-        if split_at <= 0:
-            split_at = max_length
+        if line.strip().startswith("```"):
+            in_code = not in_code
 
-        chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
+        # If adding this line would exceed limit and we're not in a code block
+        if current_len + line_len > max_length and not in_code and current_chunk:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = []
+            current_len = 0
 
-    return chunks
+        current_chunk.append(line)
+        current_len += line_len
+
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    # If any chunk still exceeds max_length (e.g. a huge code block), force-split it
+    final_chunks = []
+    for chunk in chunks:
+        if len(chunk) <= max_length:
+            final_chunks.append(chunk)
+        else:
+            # Force split at line boundaries
+            sub_lines = chunk.split("\n")
+            sub_chunk = []
+            sub_len = 0
+            for line in sub_lines:
+                if sub_len + len(line) + 1 > max_length and sub_chunk:
+                    final_chunks.append("\n".join(sub_chunk))
+                    sub_chunk = []
+                    sub_len = 0
+                sub_chunk.append(line)
+                sub_len += len(line) + 1
+            if sub_chunk:
+                final_chunks.append("\n".join(sub_chunk))
+
+    return final_chunks if final_chunks else [text]
