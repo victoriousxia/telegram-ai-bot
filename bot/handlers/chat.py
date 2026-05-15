@@ -19,10 +19,9 @@ from bot.utils.telegram import stream_and_send
 
 logger = logging.getLogger(__name__)
 
-TITLE_MAX_LEN = 10
-TITLE_PLACEHOLDER = "..."
+TITLE_MAX_LEN = 15
 TITLE_PROMPT = (
-    f"用{TITLE_MAX_LEN}字以内概括这段对话的主题，越短越好。"
+    f"用{TITLE_MAX_LEN}字以内概括这段对话的主题，越短越好，宁可精简也不要截断。"
     "不要加引号或标点，只输出标题：\n\n"
 )
 
@@ -94,8 +93,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Auto-title: generate AI title after first response
     session = await get_session(session_id)
     if session and session["title"] == "New Chat":
-        # Placeholder prevents duplicate triggers from rapid messages
-        await set_session_title(session_id, TITLE_PLACEHOLDER)
+        # Use truncated message as placeholder — meaningful even if AI generation is slow
+        placeholder = user_message[:TITLE_MAX_LEN].strip() or "Chat"
+        await set_session_title(session_id, placeholder)
         context.application.create_task(
             _generate_title(
                 session_id, user_message, model,
