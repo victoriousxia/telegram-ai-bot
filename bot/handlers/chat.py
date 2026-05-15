@@ -30,11 +30,13 @@ async def _generate_title(session_id: int, user_message: str, model: str,
                           chat: Chat, thread_id: int | None, topic_mode: int | None):
     """Background task: generate AI title and update session/topic."""
     title_model = config.TITLE_MODEL or model
+    logger.info(f"Auto-title: generating with model={title_model}, session={session_id}")
     try:
         prompt_messages = [
             {"role": "user", "content": TITLE_PROMPT + user_message}
         ]
         title = await chat_once(prompt_messages, title_model)
+        logger.info(f"Auto-title: raw result={title!r}")
         title = title.strip().strip('"\'""「」').strip()
         if not title:
             title = user_message[:TITLE_MAX_LEN].strip() or "Chat"
@@ -48,8 +50,8 @@ async def _generate_title(session_id: int, user_message: str, model: str,
                 await chat.edit_forum_topic(
                     message_thread_id=thread_id, name=title
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Auto-title: edit_forum_topic failed: {e}")
     except Exception as e:
         logger.warning(f"Auto-title generation failed: {e}")
         title = user_message[:TITLE_MAX_LEN].strip() or "Chat"
