@@ -24,6 +24,7 @@ class Config:
         else None
     )
     DB_PATH: str = os.environ.get("DB_PATH", "/data/bot.db")
+    TITLE_MODEL: str = os.environ.get("TITLE_MODEL", "")
     STREAM_UPDATE_INTERVAL: float = float(
         os.environ.get("STREAM_UPDATE_INTERVAL", "1.0")
     )
