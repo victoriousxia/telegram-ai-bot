@@ -111,7 +111,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update=update,
         )
     else:
-        logger.debug(
+        logger.info(
             f"Auto-title skipped: session_id={session_id}, "
             f"title={session['title'] if session else 'N/A'}"
         )
