@@ -2,7 +2,6 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
-from bot.config import config
 from bot.handlers.commands import check_access
 from bot.services.session import (
     get_or_create_user,
@@ -42,7 +41,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Auto-title: set title from first user message
     session = await get_session(session_id)
     if session and session["title"] == "New Chat":
-        title = user_message[:20].strip()
+        title = user_message[:20].strip() or "Chat"
         await set_session_title(session_id, title)
         if user.get("topic_mode") == 1 and update.message.message_thread_id:
             try:
