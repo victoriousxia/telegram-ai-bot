@@ -75,12 +75,22 @@ def markdown_to_html(text: str) -> str:
     return "\n".join(result).strip()
 
 
+def _strip_inline_markdown(text: str) -> str:
+    """Strip inline markdown markers that can't render inside <pre>."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
+    text = re.sub(r"_(.+?)_", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    return text
+
+
 def _render_table(table_lines: list[str]) -> str:
     """Convert markdown table lines to a <pre> block for monospace alignment."""
     rows = []
     for line in table_lines:
         stripped = line.strip().strip("|")
-        cells = [c.strip() for c in stripped.split("|")]
+        cells = [_strip_inline_markdown(c.strip()) for c in stripped.split("|")]
         if all(re.match(r"^[-:]+$", c) for c in cells if c):
             continue
         rows.append(cells)
