@@ -56,19 +56,17 @@ def markdown_to_html(text: str) -> str:
 
 def _escape_html(text: str) -> str:
     """Escape HTML special characters."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (text.replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
 
 
 def _convert_inline(line: str) -> str:
     """Convert inline MarML, preserving code spans and links."""
     # Split on code spans and links to protect them from other transformations
-    parts = re.split(r"(`[^`]+`|\[([^\]]+)\]\(([^)]+)\))", line)
+    parts = re.split(r"(`[^`]+`|\[(?:[^\]]+)\]\((?:[^)]+)\))", line)
     converted = []
-    i = 0
-    while i < len(parts):
-        part = parts[i]
-        if part is None:
-            i += 1
+    for part in parts:
+        if not part:
             continue
         if part.startswith("`") and part.endswith("`") and len(part) > 1:
             converted.append(f"<code>{_escape_html(part[1:-1])}</code>")
@@ -90,7 +88,6 @@ def _convert_inline(line: str) -> str:
             text = re.sub(r"(?<!\w)\*(.+?)\*(?!\w)", r"<i>\1</i>", text)
             text = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"<i>\1</i>", text)
             converted.append(text)
-        i += 1
     return "".join(converted)
 
 
@@ -103,24 +100,7 @@ def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]
     if len(text) <= max_length:
         return [text]
 
-    # Build segments: alternating (text, is_code) tuples
-    segments = []
-    current_pos = 0
-    for m in re.finditer(r"^```.*$", text, re.MULTILINE):
-        if current_pos < m.start():
-            segments.append((text[current_pos:m.start()], False))
-        current_pos = m.start()
-
-    # Pair up code blocks
-    code_starts = [m.start() for m in re.finditer(r"^```.*$", text, re.MULTILINE)]
-    paired = set()
-    i = 0
-    while i + 1 < len(code_starts):
-        paired.add(code_starts[i])
-        paired.add(code_starts[i + 1])
-        i += 2
-
-    # Simpler approach: split by lines, group into chunks respecting code blocks
+    # Split by lines, group into chunks respecting code blocks
     lines = text.split("\n")
     chunks = []
     current_chunk = []
