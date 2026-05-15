@@ -84,6 +84,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages = await get_session_messages(session_id)
     bot_message = await update.message.reply_text("thinking...")
 
+    logger.info(f"[handle_message] session_id={session_id}, model={model}")
+
     await stream_and_send(
         stream_chat(messages, model),
         bot_message,
@@ -91,6 +93,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context,
         session_id,
     )
+
+    logger.info("[handle_message] stream_and_send done, checking auto-title")
 
     # Auto-title: generate AI title after first response
     session = await get_session(session_id)
