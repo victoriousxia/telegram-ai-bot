@@ -21,11 +21,11 @@ _cfg.markdown_symbol.task_completed = "✔"
 _cfg.markdown_symbol.task_uncompleted = "☐"
 _cfg.markdown_symbol.horizontal_rule = "⸻" * 9
 
-# Make h1-h3 headings use underline+bold, h4-h6 bold only
+# Make all headings bold only, no underline
 EventWalker._HEADING_ENTITIES = {
-    "H1": ["bold", "underline"],
-    "H2": ["bold", "underline"],
-    "H3": ["bold", "underline"],
+    "H1": ["bold"],
+    "H2": ["bold"],
+    "H3": ["bold"],
     "H4": ["bold"],
     "H5": ["bold"],
     "H6": ["bold"],
