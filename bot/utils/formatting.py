@@ -69,6 +69,13 @@ def _adjust_spacing(text, entities):
             and lines[i + 1].strip() != ""):
             insertions.add(i)
 
+        # Add blank line after last sub-item before next numbered item
+        if (i < len(lines) - 1
+            and lines[i].strip().startswith("⦁")
+            and not lines[i + 1].strip().startswith("⦁")
+            and bool(re.match(r"^\d+\.", lines[i + 1].strip()))):
+            insertions.add(i)
+
     if not removals and not insertions:
         return text, entities
 
