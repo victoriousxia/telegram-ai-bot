@@ -1,27 +1,30 @@
 """Shared Telegram message helpers — formatting, splitting, streaming."""
+import logging
 import time
 
-from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
 from bot.config import config
-from bot.utils.formatting import markdown_to_telegramv2, split_message, TELEGRAM_MAX_LENGTH
+from bot.utils.formatting import split_message, TELEGRAM_MAX_LENGTH
+
+logger = logging.getLogger(__name__)
 
 _STREAM_OVERHEAD = len("… ") + len(" ▍")
 
 
 async def send_formatted(bot_message, text, chat=None):
-    """Send final response with MarkdownV2 formatting, split if too long.
-    Uses telegramify-markdown to convert standard Markdown to Telegram MarkdownV2.
+    """Send final response with entities-based formatting, split if too long.
+    Uses telegramify-markdown convert() for reliable rendering.
     """
     chunks = split_message(text)
     thread_id = getattr(bot_message, "message_thread_id", None)
 
-    for i, chunk in enumerate(chunks):
+    for i, (chunk_text, chunk_entities) in enumerate(chunks):
         if i == 0:
             try:
-                await bot_message.edit_text(chunk, parse_mode=ParseMode.MARKDOWN_V2)
-            except BadRequest:
+                await bot_message.edit_text(chunk_text, entities=chunk_entities)
+            except BadRequest as e:
+                logger.warning(f"edit_text with entities failed: {e}")
                 try:
                     await bot_message.edit_text(text[:TELEGRAM_MAX_LENGTH])
                 except BadRequest:
@@ -32,19 +35,21 @@ async def send_formatted(bot_message, text, chat=None):
                 if thread_id:
                     kwargs["message_thread_id"] = thread_id
                 try:
-                    await chat.send_message(chunk, parse_mode=ParseMode.MARKDOWN_V2, **kwargs)
-                except BadRequest:
-                    await chat.send_message(chunk, **kwargs)
+                    await chat.send_message(chunk_text, entities=chunk_entities, **kwargs)
+                except BadRequest as e:
+                    logger.warning(f"send_message with entities failed: {e}")
+                    await chat.send_message(chunk_text, **kwargs)
             else:
                 break
 
     if not chat and len(chunks) > 1:
         try:
-            notice = "\n\n\\[… message truncated\\]"
-            combined = chunks[0] + notice
+            chunk_text, _ = chunks[0]
+            notice = "\n\n[… message truncated]"
+            combined = chunk_text + notice
             if len(combined) > TELEGRAM_MAX_LENGTH:
-                combined = chunks[0][:TELEGRAM_MAX_LENGTH - len(notice)] + notice
-            await bot_message.edit_text(combined, parse_mode=ParseMode.MARKDOWN_V2)
+                combined = chunk_text[:TELEGRAM_MAX_LENGTH - len(notice)] + notice
+            await bot_message.edit_text(combined)
         except BadRequest:
             pass
 
