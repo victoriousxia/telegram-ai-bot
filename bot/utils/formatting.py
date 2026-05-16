@@ -18,7 +18,7 @@ _cfg.markdown_symbol.heading_level_3 = ""
 _cfg.markdown_symbol.heading_level_4 = ""
 _cfg.markdown_symbol.task_completed = "✔"
 _cfg.markdown_symbol.task_uncompleted = "☐"
-_cfg.markdown_symbol.horizontal_rule = "⸻⸻⸻⸻⸻⸻⸻⸻⸻⸻"
+_cfg.markdown_symbol.horizontal_rule = "⸻⸻⸻⸻⸻⸻⸻⸻⸻"
 
 # Make h3 headings also use underline+bold (default is bold only)
 EventWalker._HEADING_ENTITIES = {
@@ -39,52 +39,56 @@ def _is_list_line(line):
 
 
 def _adjust_spacing(text, entities):
-    """Adjust spacing: add blank line after list blocks, remove extra blank before bullets."""
+    """Adjust spacing based on block-level semantics.
+
+    Rules:
+    - Between different block elements (list end -> heading/paragraph): ensure blank line
+    - Paragraph followed by sub-item list: remove extra blank line
+    - Within the same list block: no extra blank lines
+    """
     lines = text.split("\n")
     if len(lines) <= 1:
         return text, entities
 
-    # First pass: determine which blank lines to remove and where to insert
-    removals = set()  # indices of blank lines to remove
-    insertions = set()  # indices after which to insert blank line
+    removals = set()
+    insertions = set()
 
     for i in range(len(lines)):
-        # Remove blank line between paragraph and ⦁ sub-item list only
-        if (i < len(lines) - 2
-            and lines[i].strip() != ""
-            and not _is_list_line(lines[i])
-            and lines[i + 1].strip() == ""
-            and lines[i + 2].strip().startswith("⦁")):
-            removals.add(i + 1)
+        # Remove blank line between paragraph and sub-item list
+        if (i > 0 and i < len(lines) - 1
+            and lines[i].strip() == ""
+            and not _is_list_line(lines[i - 1])
+            and lines[i - 1].strip() != ""
+            and lines[i + 1].strip().startswith("⦁")):
+            removals.add(i)
 
-        # Add blank line after list items followed by non-list non-empty content
+        # Add blank line after last list item before non-list non-empty content
         if (i < len(lines) - 1
             and _is_list_line(lines[i])
-            and lines[i + 1].strip() != ""
-            and not _is_list_line(lines[i + 1])):
+            and not _is_list_line(lines[i + 1])
+            and lines[i + 1].strip() != ""):
             insertions.add(i)
 
-    # Build new lines and track UTF-16 offset changes
-    utf16_offset = 0
-    offset_adjustments = []  # (utf16_position, delta) where delta is +1 or -1
+    if not removals and not insertions:
+        return text, entities
 
+    # Calculate UTF-16 line end offsets
+    utf16_offset = 0
     line_end_offsets = []
     for i, line in enumerate(lines):
         line_utf16_len = len(line.encode("utf-16-le")) // 2
         utf16_offset += line_utf16_len
         if i < len(lines) - 1:
-            utf16_offset += 1  # the \n
+            utf16_offset += 1
         line_end_offsets.append(utf16_offset)
 
-    # Calculate adjustments
+    # Collect offset adjustments
+    offset_adjustments = []
     for i in sorted(removals):
         if i > 0:
             offset_adjustments.append((line_end_offsets[i - 1], -1))
-
     for i in sorted(insertions):
-        adj_pos = line_end_offsets[i]
-        # Account for prior removals that shift this position
-        offset_adjustments.append((adj_pos, +1))
+        offset_adjustments.append((line_end_offsets[i], +1))
 
     # Build new text
     new_lines = []
@@ -97,7 +101,7 @@ def _adjust_spacing(text, entities):
 
     new_text = "\n".join(new_lines)
 
-    # Apply offset adjustments to entities (sort by position)
+    # Apply offset adjustments to entities
     offset_adjustments.sort(key=lambda x: x[0])
     for adj_pos, delta in offset_adjustments:
         for e in entities:
