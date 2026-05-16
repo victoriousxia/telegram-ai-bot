@@ -5,7 +5,7 @@ import time
 from telegram.error import BadRequest
 
 from bot.config import config
-from bot.utils.formatting import split_message, TELEGRAM_MAX_LENGTH
+from bot.utils.formatting import split_message, convert_for_preview, TELEGRAM_MAX_LENGTH
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +73,19 @@ async def stream_and_send(stream, bot_message, chat, context, session_id):
             if now - last_update >= update_interval:
                 if len(full_response) > TELEGRAM_MAX_LENGTH - _STREAM_OVERHEAD:
                     preview = "… " + full_response[-(TELEGRAM_MAX_LENGTH - _STREAM_OVERHEAD):]
+                    try:
+                        await bot_message.edit_text(preview + " ▍")
+                    except Exception:
+                        pass
                 else:
-                    preview = full_response
-                try:
-                    await bot_message.edit_text(preview + " ▍")
-                except Exception:
-                    pass
+                    try:
+                        preview_text, preview_entities = convert_for_preview(full_response)
+                        await bot_message.edit_text(preview_text + " ▍", entities=preview_entities)
+                    except Exception:
+                        try:
+                            await bot_message.edit_text(full_response + " ▍")
+                        except Exception:
+                            pass
                 last_update = now
 
         if full_response:

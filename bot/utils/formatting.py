@@ -221,6 +221,12 @@ def _convert_entities(lib_entities):
     return result
 
 
+def convert_for_preview(text):
+    """Convert markdown for streaming preview (no spacing adjustment)."""
+    plain_text, entities = telegramify_markdown.convert(text)
+    return plain_text, _convert_entities(entities)
+
+
 def split_message(text):
     """Convert markdown to (plain_text, entities) chunks for Telegram."""
     plain_text, entities = telegramify_markdown.convert(text)
