@@ -1,5 +1,7 @@
 """Markdown formatting utilities using telegramify-markdown."""
 
+import re
+
 import telegramify_markdown
 from telegramify_markdown import split_entities
 from telegramify_markdown.config import get_runtime_config
@@ -16,6 +18,50 @@ _cfg.markdown_symbol.heading_level_4 = ""
 _cfg.markdown_symbol.task_completed = "✔"
 _cfg.markdown_symbol.task_uncompleted = "☐"
 _cfg.markdown_symbol.horizontal_rule = "⸻⸻⸻⸻⸻⸻⸻⸻⸻⸻"
+
+
+def _add_list_group_spacing(text, entities):
+    """Insert blank line between numbered list groups with sub-items."""
+    lines = text.split("\n")
+    if len(lines) <= 1:
+        return text, entities
+
+    # Find UTF-16 offsets where we need to insert a newline
+    utf16_offset = 0
+    insert_offsets = []
+
+    for i, line in enumerate(lines):
+        line_utf16_len = len(line.encode("utf-16-le")) // 2
+        utf16_offset += line_utf16_len
+        if i < len(lines) - 1:
+            utf16_offset += 1  # the \n
+            is_subitem = line.strip().startswith("⦁")
+            next_is_numbered = bool(re.match(r"^\d+\.", lines[i + 1].strip()))
+            if is_subitem and next_is_numbered:
+                insert_offsets.append(utf16_offset)
+
+    if not insert_offsets:
+        return text, entities
+
+    # Build new text with blank lines inserted
+    new_lines = []
+    for i, line in enumerate(lines):
+        new_lines.append(line)
+        if i < len(lines) - 1:
+            is_subitem = line.strip().startswith("⦁")
+            next_is_numbered = bool(re.match(r"^\d+\.", lines[i + 1].strip()))
+            if is_subitem and next_is_numbered:
+                new_lines.append("")
+
+    new_text = "\n".join(new_lines)
+
+    # Adjust entity offsets
+    for ins_off in sorted(insert_offsets):
+        for e in entities:
+            if e.offset >= ins_off:
+                e.offset += 1
+
+    return new_text, entities
 
 
 def _convert_entities(lib_entities):
@@ -41,6 +87,7 @@ def split_message(text: str) -> list[tuple[str, list]]:
     Returns a list of (text, telegram_entities) tuples ready to send.
     """
     plain_text, entities = telegramify_markdown.convert(text)
+    plain_text, entities = _add_list_group_spacing(plain_text, entities)
     chunks = split_entities(plain_text, entities, max_utf16_len=TELEGRAM_MAX_LENGTH)
 
     result = []
