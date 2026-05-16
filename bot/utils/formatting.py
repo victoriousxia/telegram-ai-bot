@@ -7,49 +7,15 @@ from telegram import MessageEntity as TgEntity
 
 TELEGRAM_MAX_LENGTH = 4096
 
-# Configure: remove emoji symbols from headings
+# Configure symbols
 _cfg = get_runtime_config()
 _cfg.markdown_symbol.heading_level_1 = ""
 _cfg.markdown_symbol.heading_level_2 = ""
 _cfg.markdown_symbol.heading_level_3 = ""
 _cfg.markdown_symbol.heading_level_4 = ""
-
-
-def _utf16_to_str_index(s, utf16_off):
-    """Convert UTF-16 code unit offset to Python string index."""
-    count = 0
-    for i, ch in enumerate(s):
-        if count >= utf16_off:
-            return i
-        count += 2 if ord(ch) > 0xFFFF else 1
-    return len(s)
-
-
-def _ensure_heading_spacing(text, entities):
-    """Insert blank line before headings that only have a single newline."""
-    heading_offsets = set()
-    underlines = {(e.offset, e.length) for e in entities if e.type == "underline"}
-    for e in entities:
-        if e.type == "bold" and (e.offset, e.length) in underlines:
-            heading_offsets.add(e.offset)
-
-    insertions = []
-    for offset in sorted(heading_offsets, reverse=True):
-        if offset == 0:
-            continue
-        idx = _utf16_to_str_index(text, offset)
-        if idx >= 2 and text[idx - 2:idx] == "\n\n":
-            continue
-        if idx >= 1 and text[idx - 1] == "\n":
-            insertions.append((idx, offset))
-
-    for idx, utf16_off in insertions:
-        text = text[:idx] + "\n" + text[idx:]
-        for e in entities:
-            if e.offset >= utf16_off:
-                e.offset += 1
-
-    return text, entities
+_cfg.markdown_symbol.task_completed = "✔"
+_cfg.markdown_symbol.task_uncompleted = "☐"
+_cfg.markdown_symbol.horizontal_rule = "⸻⸻⸻⸻⸻⸻⸻⸻⸻⸻"
 
 
 def _convert_entities(lib_entities):
@@ -75,7 +41,6 @@ def split_message(text: str) -> list[tuple[str, list]]:
     Returns a list of (text, telegram_entities) tuples ready to send.
     """
     plain_text, entities = telegramify_markdown.convert(text)
-    plain_text, entities = _ensure_heading_spacing(plain_text, entities)
     chunks = split_entities(plain_text, entities, max_utf16_len=TELEGRAM_MAX_LENGTH)
 
     result = []
