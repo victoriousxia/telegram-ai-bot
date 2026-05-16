@@ -19,7 +19,7 @@ _cfg.markdown_symbol.heading_level_3 = ""
 _cfg.markdown_symbol.heading_level_4 = ""
 _cfg.markdown_symbol.task_completed = "✔"
 _cfg.markdown_symbol.task_uncompleted = "☐"
-_cfg.markdown_symbol.horizontal_rule = "⸻" * 9
+_cfg.markdown_symbol.horizontal_rule = "─" * 25
 
 # Make all headings bold only, no underline
 EventWalker._HEADING_ENTITIES = {
