@@ -35,7 +35,7 @@ def _is_list_line(line):
     """Check if a line is any kind of list item."""
     s = line.strip()
     return (s.startswith("⦁") or s.startswith("✔") or
-            s.startswith("☐") or bool(re.match(r"^\d+\.", s)))
+            s.startswith("☐") or bool(re.match(r"^\d+\. ", s)))
 
 
 def _adjust_spacing(text, entities):
@@ -73,7 +73,7 @@ def _adjust_spacing(text, entities):
         if (i < len(lines) - 1
             and lines[i].strip().startswith("⦁")
             and not lines[i + 1].strip().startswith("⦁")
-            and bool(re.match(r"^\d+\.", lines[i + 1].strip()))):
+            and bool(re.match(r"^\d+\. ", lines[i + 1].strip()))):
             insertions.add(i)
 
     if not removals and not insertions:
