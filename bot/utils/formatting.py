@@ -6,6 +6,7 @@ import telegramify_markdown
 from telegramify_markdown import split_entities
 from telegramify_markdown.config import get_runtime_config
 from telegramify_markdown.converter import EventWalker
+from telegramify_markdown.entity import MessageEntity
 from telegram import MessageEntity as TgEntity
 
 TELEGRAM_MAX_LENGTH = 4096
@@ -18,9 +19,9 @@ _cfg.markdown_symbol.heading_level_3 = ""
 _cfg.markdown_symbol.heading_level_4 = ""
 _cfg.markdown_symbol.task_completed = "✔"
 _cfg.markdown_symbol.task_uncompleted = "☐"
-_cfg.markdown_symbol.horizontal_rule = "⸻⸻⸻⸻⸻⸻⸻⸻⸻"
+_cfg.markdown_symbol.horizontal_rule = "⸻" * 9
 
-# Make h3 headings also use underline+bold (default is bold only)
+# Make h1-h3 headings use underline+bold, h4-h6 bold only
 EventWalker._HEADING_ENTITIES = {
     "H1": ["bold", "underline"],
     "H2": ["bold", "underline"],
@@ -42,9 +43,9 @@ def _adjust_spacing(text, entities):
     """Adjust spacing based on block-level semantics.
 
     Rules:
-    - Between different block elements (list end -> heading/paragraph): ensure blank line
-    - Paragraph followed by sub-item list: remove extra blank line
-    - Within the same list block: no extra blank lines
+    - Remove blank line between paragraph and sub-item list
+    - Add blank line after last list item before non-list non-empty content
+    - Add blank line after last sub-item before next numbered item
     """
     lines = text.split("\n")
     if len(lines) <= 1:
@@ -86,7 +87,7 @@ def _adjust_spacing(text, entities):
         line_utf16_len = len(line.encode("utf-16-le")) // 2
         utf16_offset += line_utf16_len
         if i < len(lines) - 1:
-            utf16_offset += 1
+            utf16_offset += 1  # newline character
         line_end_offsets.append(utf16_offset)
 
     # Collect offset adjustments
@@ -118,8 +119,93 @@ def _adjust_spacing(text, entities):
     return new_text, entities
 
 
+def _safe_split(text, entities, max_len=TELEGRAM_MAX_LENGTH):
+    """Split text+entities into chunks without cutting through pre (code block) entities."""
+    utf16_len = len(text.encode("utf-16-le")) // 2
+    if utf16_len <= max_len:
+        return [(text, entities)]
+
+    # Build protected ranges from "pre" entities (code blocks)
+    protected = []
+    for e in entities:
+        if e.type == "pre":
+            protected.append((e.offset, e.offset + e.length))
+
+    # Find safe split points: positions of \n\n that are NOT inside protected ranges
+    split_candidates = []
+    utf16_pos = 0
+    for i, ch in enumerate(text):
+        if ch == "\n" and i + 1 < len(text) and text[i + 1] == "\n":
+            pos = utf16_pos + 1  # after the first \n
+            inside_protected = any(start <= pos < end for start, end in protected)
+            if not inside_protected:
+                split_candidates.append((pos + 1, i + 2))  # utf16 pos, str index (after \n\n)
+        utf16_pos += 2 if ord(ch) > 0xFFFF else 1
+
+    # Greedy algorithm: for each chunk, find the last split point that fits within max_len
+    chunks = []
+    chunk_start_utf16 = 0
+    chunk_start_str = 0
+    last_good_utf16 = 0
+    last_good_str = 0
+
+    for utf16_pos, str_idx in split_candidates:
+        if utf16_pos - chunk_start_utf16 <= max_len:
+            last_good_utf16 = utf16_pos
+            last_good_str = str_idx
+        else:
+            # Emit chunk up to last_good
+            if last_good_str > chunk_start_str:
+                chunks.append(text[chunk_start_str:last_good_str].rstrip("\n"))
+                chunk_start_utf16 = last_good_utf16
+                chunk_start_str = last_good_str
+                last_good_utf16 = utf16_pos
+                last_good_str = str_idx
+            else:
+                # No safe split found, fall back to split_entities from the library
+                return split_entities(text, entities, max_utf16_len=max_len)
+
+    # Remaining text
+    remaining = text[chunk_start_str:]
+    if remaining.strip():
+        rem_utf16 = len(remaining.encode("utf-16-le")) // 2
+        if rem_utf16 > max_len:
+            # Still too long, use library split for this remainder
+            last_chunks = split_entities(remaining, [], max_utf16_len=max_len)
+            chunks.extend([ct for ct, _ in last_chunks])
+        else:
+            chunks.append(remaining.rstrip("\n"))
+
+    if not chunks:
+        return split_entities(text, entities, max_utf16_len=max_len)
+
+    # Assign entities to chunks by checking if entity offset falls within chunk range
+    result = []
+    chunk_start_utf16 = 0
+    for chunk_text in chunks:
+        chunk_utf16_len = len(chunk_text.encode("utf-16-le")) // 2
+        chunk_end_utf16 = chunk_start_utf16 + chunk_utf16_len
+        chunk_ents = []
+        for e in entities:
+            # Entity belongs to this chunk if it starts within it
+            if chunk_start_utf16 <= e.offset < chunk_end_utf16:
+                new_e = MessageEntity(
+                    type=e.type,
+                    offset=e.offset - chunk_start_utf16,
+                    length=min(e.length, chunk_utf16_len - (e.offset - chunk_start_utf16)),
+                    url=e.url,
+                    language=e.language,
+                )
+                chunk_ents.append(new_e)
+        result.append((chunk_text, chunk_ents))
+        # Advance chunk_start_utf16 by chunk_utf16_len + 2 (for the \n\n separator)
+        chunk_start_utf16 = chunk_end_utf16 + 2
+
+    return result
+
+
 def _convert_entities(lib_entities):
-    """Convert telegramify-markdown entities to telegram.MessageEntity objects."""
+    """Convert telegramify-markdown MessageEntity to telegram.MessageEntity objects."""
     result = []
     for e in lib_entities:
         kwargs = {
@@ -139,7 +225,7 @@ def split_message(text):
     """Convert markdown to (plain_text, entities) chunks for Telegram."""
     plain_text, entities = telegramify_markdown.convert(text)
     plain_text, entities = _adjust_spacing(plain_text, entities)
-    chunks = split_entities(plain_text, entities, max_utf16_len=TELEGRAM_MAX_LENGTH)
+    chunks = _safe_split(plain_text, entities)
 
     result = []
     for chunk_text, chunk_entities in chunks:
