@@ -5,6 +5,7 @@ import re
 import telegramify_markdown
 from telegramify_markdown import split_entities
 from telegramify_markdown.config import get_runtime_config
+from telegramify_markdown.converter import EventWalker
 from telegram import MessageEntity as TgEntity
 
 TELEGRAM_MAX_LENGTH = 4096
@@ -18,6 +19,16 @@ _cfg.markdown_symbol.heading_level_4 = ""
 _cfg.markdown_symbol.task_completed = "✔"
 _cfg.markdown_symbol.task_uncompleted = "☐"
 _cfg.markdown_symbol.horizontal_rule = "⸻⸻⸻⸻⸻⸻⸻⸻⸻⸻"
+
+# Make h3 headings also use underline+bold (default is bold only)
+EventWalker._HEADING_ENTITIES = {
+    "H1": ["bold", "underline"],
+    "H2": ["bold", "underline"],
+    "H3": ["bold", "underline"],
+    "H4": ["bold"],
+    "H5": ["bold"],
+    "H6": ["bold"],
+}
 
 
 def _is_list_line(line):
@@ -38,12 +49,12 @@ def _adjust_spacing(text, entities):
     insertions = set()  # indices after which to insert blank line
 
     for i in range(len(lines)):
-        # Remove blank line between paragraph and bullet list
+        # Remove blank line between paragraph and ⦁ sub-item list only
         if (i < len(lines) - 2
             and lines[i].strip() != ""
             and not _is_list_line(lines[i])
             and lines[i + 1].strip() == ""
-            and _is_list_line(lines[i + 2])):
+            and lines[i + 2].strip().startswith("⦁")):
             removals.add(i + 1)
 
         # Add blank line after list items followed by non-list non-empty content
