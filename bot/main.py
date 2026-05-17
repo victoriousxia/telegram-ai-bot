@@ -74,7 +74,10 @@ def main():
     app.add_handler(CallbackQueryHandler(model_callback, pattern=r"^model:"))
     app.add_handler(CallbackQueryHandler(topic_switch_callback, pattern=r"^topic:switch:"))
     app.add_handler(CallbackQueryHandler(topic_new_callback, pattern=r"^topic:new$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(
+        (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+        handle_message,
+    ))
 
     logger.info("Bot starting...")
     app.run_polling(drop_pending_updates=True)

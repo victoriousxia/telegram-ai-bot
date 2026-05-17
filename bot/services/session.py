@@ -1,5 +1,17 @@
+import json
+
 from bot.config import config
 from bot.database.models import get_db
+
+
+def _parse_content(raw: str):
+    """Parse stored content. Returns str for plain text, list for multimodal."""
+    if raw.startswith("["):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return raw
 
 
 async def get_or_create_user(telegram_id: int) -> dict:
@@ -89,7 +101,7 @@ async def get_session_messages(session_id: int) -> list[dict]:
             (session_id,),
         )
         rows = await cursor.fetchall()
-        return [{"role": row["role"], "content": row["content"]} for row in rows]
+        return [{"role": row["role"], "content": _parse_content(row["content"])} for row in rows]
     finally:
         await db.close()
 
