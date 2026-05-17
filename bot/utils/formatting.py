@@ -143,17 +143,22 @@ def _adjust_spacing(text, entities):
 
     new_text = "\n".join(new_lines)
 
-    # Apply offset adjustments to entities
-    # Fix #5: For entities spanning the adjustment point, adjust length too
+    # Apply offset adjustments to entities based on original positions.
+    # Each entity's shift is computed from all adjustment points before it,
+    # avoiding sequential mutation bugs when multiple adjustments accumulate.
     offset_adjustments.sort(key=lambda x: x[0])
-    for adj_pos, delta in offset_adjustments:
-        for e in entities:
-            if e.offset >= adj_pos:
-                # Entity starts at or after adjustment point: shift offset
-                e.offset += delta
-            elif e.offset + e.length > adj_pos:
-                # Entity spans the adjustment point: adjust length
-                e.length += delta
+    for e in entities:
+        orig_offset = e.offset
+        orig_end = e.offset + e.length
+        offset_shift = 0
+        length_shift = 0
+        for adj_pos, delta in offset_adjustments:
+            if adj_pos <= orig_offset:
+                offset_shift += delta
+            elif adj_pos < orig_end:
+                length_shift += delta
+        e.offset += offset_shift
+        e.length += length_shift
 
     return new_text, entities
 
