@@ -49,12 +49,29 @@ def _adjust_spacing(text, entities):
 
     Rules:
     - Remove blank line between paragraph and sub-item list
+    - Remove blank line immediately before a code block
     - Add blank line after last list item before non-list non-empty content
     - Add blank line after last sub-item before next numbered item
     """
     lines = text.split("\n")
     if len(lines) <= 1:
         return text, entities
+
+    # Calculate UTF-16 offset for each line start to locate pre entities
+    line_starts_utf16 = [0]
+    _off = 0
+    for line in lines[:-1]:
+        _off += len(line.encode("utf-16-le")) // 2 + 1
+        line_starts_utf16.append(_off)
+
+    # Find lines that are the start of a pre (code block) entity
+    pre_start_lines = set()
+    for e in entities:
+        if e.type == "pre":
+            for idx, start in enumerate(line_starts_utf16):
+                if start == e.offset:
+                    pre_start_lines.add(idx)
+                    break
 
     removals = set()
     insertions = set()
@@ -66,6 +83,11 @@ def _adjust_spacing(text, entities):
             and not _is_list_line(lines[i - 1])
             and lines[i - 1].strip() != ""
             and lines[i + 1].strip().startswith("⦁")):
+            removals.add(i)
+
+        # Remove blank line immediately before a code block
+        if (i > 0 and lines[i].strip() == ""
+            and (i + 1) in pre_start_lines):
             removals.add(i)
 
         # Add blank line after last list item before non-list non-empty content
