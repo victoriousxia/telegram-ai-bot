@@ -99,9 +99,13 @@ sudo docker compose up -d --build
 
 ## 后续功能（TODO）
 
+- [ ] 发送文件和图片（模型生成的代码/文件以附件形式发送）
+- [ ] 接收文件和图片（用户发送图片/文件后模型能识别处理）
+- [ ] Skill 系统（预设 system prompt + 模型绑定，如 /translate、/summarize）
+- [ ] Web Search 支持（模型调用搜索工具获取实时信息）
+- [ ] Markdown 渲染进一步优化（持续改进边界情况）
 - [ ] Topic 删除功能
 - [ ] /branch 从当前会话分叉
-- [ ] 图片/文件消息支持
 - [ ] 多轮对话 token 计数显示
 
 ## 注意事项
