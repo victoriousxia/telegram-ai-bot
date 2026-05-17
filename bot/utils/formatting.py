@@ -104,6 +104,12 @@ def _adjust_spacing(text, entities):
             and bool(re.match(r"^\d+\. ", lines[i + 1].strip()))):
             insertions.add(i)
 
+        # Add blank line between consecutive numbered list items
+        if (i < len(lines) - 1
+            and bool(re.match(r"^\d+\. ", lines[i].strip()))
+            and bool(re.match(r"^\d+\. ", lines[i + 1].strip()))):
+            insertions.add(i)
+
     if not removals and not insertions:
         return text, entities
 
