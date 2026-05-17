@@ -302,11 +302,11 @@ def convert_for_preview(text):
     return plain_text, _convert_entities(entities)
 
 
-def split_message(text):
+def split_message(text, max_len=TELEGRAM_MAX_LENGTH):
     """Convert markdown to (plain_text, entities) chunks for Telegram."""
     plain_text, entities = telegramify_markdown.convert(text)
     plain_text, entities = _adjust_spacing(plain_text, entities)
-    chunks = _safe_split(plain_text, entities)
+    chunks = _safe_split(plain_text, entities, max_len=max_len)
 
     result = []
     for chunk_text, chunk_entities in chunks:
