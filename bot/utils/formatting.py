@@ -90,12 +90,22 @@ def _adjust_spacing(text, entities):
             and (i + 1) in pre_start_lines):
             removals.add(i)
 
-        # Add blank line after last list item before non-list non-empty content
+        # Add blank line after last bullet item before non-list non-empty content
+        # (exclude numbered items — their following text is the item description)
         if (i < len(lines) - 1
             and _is_list_line(lines[i])
+            and not bool(re.match(r"^\d+\. ", lines[i].strip()))
             and not _is_list_line(lines[i + 1])
             and lines[i + 1].strip() != ""):
             insertions.add(i)
+
+        # Add blank line before a numbered item when preceded by non-list content
+        # (separates items visually)
+        if (i > 0
+            and bool(re.match(r"^\d+\. ", lines[i].strip()))
+            and lines[i - 1].strip() != ""
+            and not _is_list_line(lines[i - 1])):
+            insertions.add(i - 1)
 
         # Add blank line after last sub-item before next numbered item
         if (i < len(lines) - 1
@@ -159,6 +169,175 @@ def _adjust_spacing(text, entities):
                 length_shift += delta
         e.offset += offset_shift
         e.length += length_shift
+
+    return new_text, entities
+
+
+def _visual_width(s):
+    """Calculate visual width: CJK chars count as 2, others as 1."""
+    w = 0
+    for ch in s:
+        cp = ord(ch)
+        if (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF
+                or 0xF900 <= cp <= 0xFAFF or 0x2E80 <= cp <= 0x2EFF
+                or 0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF
+                or 0xFE30 <= cp <= 0xFE4F):
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _is_cjk_or_punct(ch):
+    """Check if char is CJK or CJK punctuation (safe to break after)."""
+    cp = ord(ch)
+    return (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF
+            or 0xF900 <= cp <= 0xFAFF or 0x3000 <= cp <= 0x303F
+            or 0xFF00 <= cp <= 0xFF60 or 0xFE30 <= cp <= 0xFE4F
+            or cp in (0x3001, 0x3002, 0xFF0C, 0xFF1B, 0xFF1A,
+                      0x2014, 0x2026, 0xFF09, 0x300B, 0x300D,
+                      0x3011, 0xFF3D))
+
+
+def _wrap_line(text, max_width, indent):
+    """Wrap a single line with hanging indent, respecting word boundaries.
+
+    Returns (wrapped_lines, break_info) where break_info is a list of
+    (char_offset, consumed_spaces) tuples. char_offset is the position in the
+    original text of the first char after the break. consumed_spaces is the
+    number of trailing spaces stripped at the break point.
+    """
+    if _visual_width(text) <= max_width:
+        return [text], []
+
+    indent_str = " " * indent
+    lines = []
+    break_info = []
+    current = ""
+    current_width = 0
+    orig_consumed = 0
+
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        ch_w = _visual_width(ch)
+
+        if current_width + ch_w > max_width:
+            break_pos = -1
+            for j in range(len(current) - 1, max(len(current) - 25, indent - 1), -1):
+                c = current[j]
+                if c == ' ':
+                    break_pos = j + 1
+                    break
+                if _is_cjk_or_punct(c):
+                    break_pos = j + 1
+                    break
+
+            if break_pos > 0:
+                raw = current[:break_pos]
+                stripped = raw.rstrip()
+                consumed_spaces = len(raw) - len(stripped)
+                lines.append(stripped)
+                remainder = current[break_pos:]
+                break_info.append((orig_consumed - len(remainder), consumed_spaces))
+                current = indent_str + remainder + ch
+                current_width = indent + _visual_width(remainder) + ch_w
+            else:
+                lines.append(current)
+                break_info.append((orig_consumed, 0))
+                current = indent_str + ch
+                current_width = indent + ch_w
+        else:
+            current += ch
+            current_width += ch_w
+
+        orig_consumed += 1
+        i += 1
+
+    if current.strip():
+        lines.append(current)
+    return lines, break_info
+
+
+def _indent_numbered_items(text, entities, max_visual_width=60):
+    """Add hanging indentation to numbered and bullet list items that are long."""
+    lines = text.split("\n")
+    if len(lines) <= 1:
+        return text, entities
+
+    # Identify which lines are inside code blocks (don't touch those)
+    line_starts_utf16 = [0]
+    off = 0
+    for line in lines[:-1]:
+        off += len(line.encode("utf-16-le")) // 2 + 1
+        line_starts_utf16.append(off)
+
+    code_lines = set()
+    for e in entities:
+        if e.type == "pre":
+            for idx, start in enumerate(line_starts_utf16):
+                if start >= e.offset and start < e.offset + e.length:
+                    code_lines.add(idx)
+
+    new_lines = []
+    offset_adjustments = []
+    utf16_pos = 0
+
+    for i, line in enumerate(lines):
+        line_utf16_len = len(line.encode("utf-16-le")) // 2
+
+        # Determine if this is a list item and its indent width
+        indent = 0
+        if i not in code_lines:
+            m = re.match(r"^(\d+\. )", line)
+            if m:
+                indent = len(m.group(1))
+            elif line.startswith("⦁ "):
+                indent = 2
+            elif line.startswith("✔ ") or line.startswith("☐ "):
+                indent = 2
+
+        if not indent:
+            new_lines.append(line)
+            utf16_pos += line_utf16_len + (1 if i < len(lines) - 1 else 0)
+            continue
+
+        wrapped, break_info = _wrap_line(line, max_visual_width, indent)
+        if not break_info:
+            new_lines.append(line)
+            utf16_pos += line_utf16_len + (1 if i < len(lines) - 1 else 0)
+            continue
+
+        new_lines.extend(wrapped)
+        # Convert char offsets to UTF-16 offsets and record adjustments
+        for char_offset, consumed_spaces in break_info:
+            prefix = line[:char_offset]
+            prefix_utf16 = len(prefix.encode("utf-16-le")) // 2
+            insert_at = utf16_pos + prefix_utf16
+            # Net delta: replaced consumed_spaces chars with \n+indent
+            delta = (1 + indent) - consumed_spaces
+            offset_adjustments.append((insert_at, delta))
+
+        utf16_pos += line_utf16_len + (1 if i < len(lines) - 1 else 0)
+
+    if not offset_adjustments:
+        return text, entities
+
+    new_text = "\n".join(new_lines)
+
+    offset_adjustments.sort(key=lambda x: x[0])
+    for e in entities:
+        orig_offset = e.offset
+        orig_end = e.offset + e.length
+        o_shift = 0
+        l_shift = 0
+        for adj_pos, delta in offset_adjustments:
+            if adj_pos <= orig_offset:
+                o_shift += delta
+            elif adj_pos < orig_end:
+                l_shift += delta
+        e.offset += o_shift
+        e.length += l_shift
 
     return new_text, entities
 
@@ -306,6 +485,7 @@ def split_message(text, max_len=TELEGRAM_MAX_LENGTH):
     """Convert markdown to (plain_text, entities) chunks for Telegram."""
     plain_text, entities = telegramify_markdown.convert(text)
     plain_text, entities = _adjust_spacing(plain_text, entities)
+    plain_text, entities = _indent_numbered_items(plain_text, entities)
     chunks = _safe_split(plain_text, entities, max_len=max_len)
 
     result = []
