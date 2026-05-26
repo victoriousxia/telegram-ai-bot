@@ -4,3 +4,5 @@ anthropic==0.52.0
 httpx==0.28.1
 aiosqlite==0.20.0
 python-dotenv==1.1.0
+telegramify-markdown==1.1.5
+PyPDF2==3.0.1

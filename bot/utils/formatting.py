@@ -1,227 +1,496 @@
+"""Markdown formatting utilities using telegramify-markdown."""
+
 import re
-import unicodedata
+
+import telegramify_markdown
+from telegramify_markdown import split_entities
+from telegramify_markdown.config import get_runtime_config
+from telegramify_markdown.converter import EventWalker
+from telegramify_markdown.entity import MessageEntity
+from telegram import MessageEntity as TgEntity
 
 TELEGRAM_MAX_LENGTH = 4096
 
+# Configure symbols
+_cfg = get_runtime_config()
+_cfg.markdown_symbol.heading_level_1 = ""
+_cfg.markdown_symbol.heading_level_2 = ""
+_cfg.markdown_symbol.heading_level_3 = ""
+_cfg.markdown_symbol.heading_level_4 = ""
+_cfg.markdown_symbol.task_completed = "✔"
+_cfg.markdown_symbol.task_uncompleted = "☐"
+_cfg.markdown_symbol.horizontal_rule = "—" * 18
 
-def markdown_to_html(text: str) -> str:
-    """Convert standard Markdown to Telegram-compatible HTML.
-    Known limitation: nested inline formatting (e.g. ***bold italic***) is not
-    reliably supported — only single-level bold/italic is converted.
+# Make all headings bold only, no underline.
+# NOTE: This depends on EventWalker._HEADING_ENTITIES internal attribute.
+# If the library changes its internals, headings will use default formatting.
+try:
+    EventWalker._HEADING_ENTITIES = {
+        "H1": ["bold"],
+        "H2": ["bold"],
+        "H3": ["bold"],
+        "H4": ["bold"],
+        "H5": ["bold"],
+        "H6": ["bold"],
+    }
+except AttributeError:
+    pass
+
+
+def _is_list_line(line):
+    """Check if a line is any kind of list item."""
+    s = line.strip()
+    return (s.startswith("⦁") or s.startswith("✔") or
+            s.startswith("☐") or bool(re.match(r"^\d+\. ", s)))
+
+
+def _adjust_spacing(text, entities):
+    """Adjust spacing based on block-level semantics.
+
+    Rules:
+    - Remove blank line between paragraph and sub-item list
+    - Remove blank line immediately before a code block
+    - Add blank line after last list item before non-list non-empty content
+    - Add blank line after last sub-item before next numbered item
     """
     lines = text.split("\n")
-    result = []
-    in_code_block = False
-    code_block_lines = []
-    table_lines = []
+    if len(lines) <= 1:
+        return text, entities
 
-    for line in lines:
-        # Flush accumulated table when we hit a non-table line
-        if table_lines and not re.match(r"^\s*\|", line):
-            rendered = _render_table(table_lines)
-            if rendered:
-                result.append(rendered)
-            table_lines = []
+    # Calculate UTF-16 offset for each line start to locate pre entities
+    line_starts_utf16 = [0]
+    _off = 0
+    for line in lines[:-1]:
+        _off += len(line.encode("utf-16-le")) // 2 + 1
+        line_starts_utf16.append(_off)
 
-        if line.strip().startswith("```"):
-            if in_code_block:
-                code_content = "\n".join(code_block_lines)
-                result.append(f"<pre>{_escape_html(code_content)}</pre>")
-                code_block_lines = []
-                in_code_block = False
-            else:
-                in_code_block = True
+    # Find lines that are the start of a pre (code block) entity
+    pre_start_lines = set()
+    for e in entities:
+        if e.type == "pre":
+            for idx, start in enumerate(line_starts_utf16):
+                if start == e.offset:
+                    pre_start_lines.add(idx)
+                    break
+
+    removals = set()
+    insertions = set()
+
+    for i in range(len(lines)):
+        # Remove blank line between paragraph and sub-item list
+        if (i > 0 and i < len(lines) - 1
+            and lines[i].strip() == ""
+            and not _is_list_line(lines[i - 1])
+            and lines[i - 1].strip() != ""
+            and lines[i + 1].strip().startswith("⦁")):
+            removals.add(i)
+
+        # Remove blank line immediately before a code block
+        if (i > 0 and lines[i].strip() == ""
+            and (i + 1) in pre_start_lines):
+            removals.add(i)
+
+        # Add blank line after last bullet item before non-list non-empty content
+        # (exclude numbered items — their following text is the item description)
+        if (i < len(lines) - 1
+            and _is_list_line(lines[i])
+            and not bool(re.match(r"^\d+\. ", lines[i].strip()))
+            and not _is_list_line(lines[i + 1])
+            and lines[i + 1].strip() != ""):
+            insertions.add(i)
+
+        # Add blank line before a numbered item when preceded by non-list content
+        # (separates items visually)
+        if (i > 0
+            and bool(re.match(r"^\d+\. ", lines[i].strip()))
+            and lines[i - 1].strip() != ""
+            and not _is_list_line(lines[i - 1])):
+            insertions.add(i - 1)
+
+        # Add blank line after last sub-item before next numbered item
+        if (i < len(lines) - 1
+            and lines[i].strip().startswith("⦁")
+            and not lines[i + 1].strip().startswith("⦁")
+            and bool(re.match(r"^\d+\. ", lines[i + 1].strip()))):
+            insertions.add(i)
+
+        # Add blank line between consecutive numbered list items (only for long items)
+        if (i < len(lines) - 1
+            and bool(re.match(r"^\d+\. ", lines[i].strip()))
+            and bool(re.match(r"^\d+\. ", lines[i + 1].strip()))
+            and (len(lines[i]) > 40 or len(lines[i + 1]) > 40)):
+            insertions.add(i)
+
+    if not removals and not insertions:
+        return text, entities
+
+    # Calculate UTF-16 line end offsets
+    utf16_offset = 0
+    line_end_offsets = []
+    for i, line in enumerate(lines):
+        line_utf16_len = len(line.encode("utf-16-le")) // 2
+        utf16_offset += line_utf16_len
+        if i < len(lines) - 1:
+            utf16_offset += 1  # newline character
+        line_end_offsets.append(utf16_offset)
+
+    # Collect offset adjustments
+    offset_adjustments = []
+    for i in sorted(removals):
+        if i > 0:
+            offset_adjustments.append((line_end_offsets[i - 1], -1))
+    for i in sorted(insertions):
+        offset_adjustments.append((line_end_offsets[i], +1))
+
+    # Build new text
+    new_lines = []
+    for i, line in enumerate(lines):
+        if i in removals:
             continue
+        new_lines.append(line)
+        if i in insertions:
+            new_lines.append("")
 
-        if in_code_block:
-            code_block_lines.append(line)
-            continue
+    new_text = "\n".join(new_lines)
 
-        # Table rows: lines starting with |
-        if re.match(r"^\s*\|", line):
-            table_lines.append(line)
-            continue
+    # Apply offset adjustments to entities based on original positions.
+    # Each entity's shift is computed from all adjustment points before it,
+    # avoiding sequential mutation bugs when multiple adjustments accumulate.
+    offset_adjustments.sort(key=lambda x: x[0])
+    for e in entities:
+        orig_offset = e.offset
+        orig_end = e.offset + e.length
+        offset_shift = 0
+        length_shift = 0
+        for adj_pos, delta in offset_adjustments:
+            if adj_pos <= orig_offset:
+                offset_shift += delta
+            elif adj_pos < orig_end:
+                length_shift += delta
+        e.offset += offset_shift
+        e.length += length_shift
 
-        # Headers → bold (only add extra newline if previous line isn't blank)
-        header_match = re.match(r"^(#{1,3})\s+(.+)$", line)
-        if header_match:
-            prefix = "\n" if result and result[-1] != "" else ""
-            result.append(f"{prefix}<b>{_convert_inline(header_match.group(2))}</b>")
-            continue
-
-        # Unordered list items: "* text" or "- text" → "• text" (skip inline conversion for the marker)
-        list_match = re.match(r"^(\s*)[*\-]\s+(.+)$", line)
-        if list_match:
-            indent = list_match.group(1)
-            content = _convert_inline(list_match.group(2))
-            result.append(f"{_escape_html(indent)}• {content}")
-            continue
-
-        # Regular line: inline formatting
-        line = _convert_inline(line)
-        result.append(line)
-
-    # Flush remaining table
-    if table_lines:
-        rendered = _render_table(table_lines)
-        if rendered:
-            result.append(rendered)
-
-    # Unclosed code block
-    if in_code_block and code_block_lines:
-        code_content = "\n".join(code_block_lines)
-        result.append(f"<pre>{_escape_html(code_content)}</pre>")
-
-    return "\n".join(result).strip()
+    return new_text, entities
 
 
-def _strip_inline_markdown(text: str) -> str:
-    """Strip inline markdown markers that can't render inside <pre>."""
-    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-    text = re.sub(r"__(.+?)__", r"\1", text)
-    text = re.sub(r"\*(.+?)\*", r"\1", text)
-    text = re.sub(r"_(.+?)_", r"\1", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    return text
-
-
-def _render_table(table_lines: list[str]) -> str:
-    """Convert markdown table lines to a <pre> block for monospace alignment."""
-    rows = []
-    for line in table_lines:
-        stripped = line.strip().strip("|")
-        cells = [_strip_inline_markdown(c.strip()) for c in stripped.split("|")]
-        if all(re.match(r"^[-:]+$", c) for c in cells if c):
-            continue
-        rows.append(cells)
-
-    if not rows:
-        return ""
-
-    col_count = max(len(r) for r in rows)
-    col_widths = [0] * col_count
-    for row in rows:
-        for i, cell in enumerate(row):
-            if i < col_count:
-                col_widths[i] = max(col_widths[i], _display_width(cell))
-
-    formatted = []
-    for idx, row in enumerate(rows):
-        padded = []
-        for i in range(col_count):
-            cell = row[i] if i < len(row) else ""
-            pad = col_widths[i] - _display_width(cell)
-            padded.append(cell + " " * pad)
-        formatted.append("  ".join(padded))
-        if idx == 0 and len(rows) > 1:
-            formatted.append("  ".join("-" * w for w in col_widths))
-
-    return f"<pre>{_escape_html(chr(10).join(formatted))}</pre>"
-
-
-def _display_width(text: str) -> int:
-    """Calculate display width accounting for wide (CJK) characters."""
-    width = 0
-    for ch in text:
-        if unicodedata.east_asian_width(ch) in ("W", "F"):
-            width += 2
+def _visual_width(s):
+    """Calculate visual width: CJK chars count as 2, others as 1."""
+    w = 0
+    for ch in s:
+        cp = ord(ch)
+        if (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF
+                or 0xF900 <= cp <= 0xFAFF or 0x2E80 <= cp <= 0x2EFF
+                or 0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF
+                or 0xFE30 <= cp <= 0xFE4F):
+            w += 2
         else:
-            width += 1
-    return width
+            w += 1
+    return w
 
 
-def _escape_html(text: str) -> str:
-    """Escape HTML special characters."""
-    return (text.replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace('"', "&quot;"))
+def _is_cjk_or_punct(ch):
+    """Check if char is CJK or CJK punctuation (safe to break after)."""
+    cp = ord(ch)
+    return (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF
+            or 0xF900 <= cp <= 0xFAFF or 0x3000 <= cp <= 0x303F
+            or 0xFF00 <= cp <= 0xFF60 or 0xFE30 <= cp <= 0xFE4F
+            or cp in (0x3001, 0x3002, 0xFF0C, 0xFF1B, 0xFF1A,
+                      0x2014, 0x2026, 0xFF09, 0x300B, 0x300D,
+                      0x3011, 0xFF3D))
 
 
-def _convert_inline(line: str) -> str:
-    """Convert inline MarML, preserving code spans and links."""
-    # Split on code spans and links to protect them from other transformations
-    parts = re.split(r"(`[^`]+`|\[(?:[^\]]+)\]\((?:[^)]+)\))", line)
-    converted = []
-    for part in parts:
-        if not part:
-            continue
-        if part.startswith("`") and part.endswith("`") and len(part) > 1:
-            converted.append(f"<code>{_escape_html(part[1:-1])}</code>")
-        elif part.startswith("[") and "](" in part:
-            # Markdown link [text](url)
-            m = re.match(r"\[([^\]]+)\]\(([^)]+)\)", part)
+def _wrap_line(text, max_width, indent):
+    """Wrap a single line with hanging indent, respecting word boundaries.
+
+    Returns (wrapped_lines, break_info) where break_info is a list of
+    (char_offset, consumed_spaces) tuples. char_offset is the position in the
+    original text of the first char after the break. consumed_spaces is the
+    number of trailing spaces stripped at the break point.
+    """
+    if _visual_width(text) <= max_width:
+        return [text], []
+
+    indent_str = " " * indent
+    lines = []
+    break_info = []
+    current = ""
+    current_width = 0
+    orig_consumed = 0
+
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        ch_w = _visual_width(ch)
+
+        if current_width + ch_w > max_width:
+            break_pos = -1
+            for j in range(len(current) - 1, max(len(current) - 25, indent - 1), -1):
+                c = current[j]
+                if c == ' ':
+                    break_pos = j + 1
+                    break
+                if _is_cjk_or_punct(c):
+                    break_pos = j + 1
+                    break
+
+            if break_pos > 0:
+                raw = current[:break_pos]
+                stripped = raw.rstrip()
+                consumed_spaces = len(raw) - len(stripped)
+                lines.append(stripped)
+                remainder = current[break_pos:]
+                break_info.append((orig_consumed - len(remainder), consumed_spaces))
+                current = indent_str + remainder + ch
+                current_width = indent + _visual_width(remainder) + ch_w
+            else:
+                lines.append(current)
+                break_info.append((orig_consumed, 0))
+                current = indent_str + ch
+                current_width = indent + ch_w
+        else:
+            current += ch
+            current_width += ch_w
+
+        orig_consumed += 1
+        i += 1
+
+    if current.strip():
+        lines.append(current)
+    return lines, break_info
+
+
+def _indent_numbered_items(text, entities, max_visual_width=60):
+    """Add hanging indentation to numbered and bullet list items that are long."""
+    lines = text.split("\n")
+    if len(lines) <= 1:
+        return text, entities
+
+    # Identify which lines are inside code blocks (don't touch those)
+    line_starts_utf16 = [0]
+    off = 0
+    for line in lines[:-1]:
+        off += len(line.encode("utf-16-le")) // 2 + 1
+        line_starts_utf16.append(off)
+
+    code_lines = set()
+    for e in entities:
+        if e.type == "pre":
+            for idx, start in enumerate(line_starts_utf16):
+                if start >= e.offset and start < e.offset + e.length:
+                    code_lines.add(idx)
+
+    new_lines = []
+    offset_adjustments = []
+    utf16_pos = 0
+
+    for i, line in enumerate(lines):
+        line_utf16_len = len(line.encode("utf-16-le")) // 2
+
+        # Determine if this is a list item and its indent width
+        indent = 0
+        if i not in code_lines:
+            m = re.match(r"^(\d+\. )", line)
             if m:
-                link_text = _escape_html(m.group(1))
-                url = _escape_html(m.group(2))
-                converted.append(f'<a href="{url}">{link_text}</a>')
-            else:
-                converted.append(_escape_html(part))
-        else:
-            text = _escape_html(part)
-            # Bold: **text** or __text__
-            text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-            text = re.sub(r"__(.+?)__", r"<b>\1</b>", text)
-            # Italic: *text* or _text_ (not at line start to avoid list confusion)
-            text = re.sub(r"(?<!\w)\*(.+?)\*(?!\w)", r"<i>\1</i>", text)
-            text = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"<i>\1</i>", text)
-            converted.append(text)
-    return "".join(converted)
+                indent = len(m.group(1))
+            elif line.startswith("⦁ "):
+                indent = 2
+            elif line.startswith("✔ ") or line.startswith("☐ "):
+                indent = 2
+
+        if not indent:
+            new_lines.append(line)
+            utf16_pos += line_utf16_len + (1 if i < len(lines) - 1 else 0)
+            continue
+
+        wrapped, break_info = _wrap_line(line, max_visual_width, indent)
+        if not break_info:
+            new_lines.append(line)
+            utf16_pos += line_utf16_len + (1 if i < len(lines) - 1 else 0)
+            continue
+
+        new_lines.extend(wrapped)
+        # Convert char offsets to UTF-16 offsets and record adjustments
+        for char_offset, consumed_spaces in break_info:
+            prefix = line[:char_offset]
+            prefix_utf16 = len(prefix.encode("utf-16-le")) // 2
+            insert_at = utf16_pos + prefix_utf16
+            # Net delta: replaced consumed_spaces chars with \n+indent
+            delta = (1 + indent) - consumed_spaces
+            offset_adjustments.append((insert_at, delta))
+
+        utf16_pos += line_utf16_len + (1 if i < len(lines) - 1 else 0)
+
+    if not offset_adjustments:
+        return text, entities
+
+    new_text = "\n".join(new_lines)
+
+    offset_adjustments.sort(key=lambda x: x[0])
+    for e in entities:
+        orig_offset = e.offset
+        orig_end = e.offset + e.length
+        o_shift = 0
+        l_shift = 0
+        for adj_pos, delta in offset_adjustments:
+            if adj_pos <= orig_offset:
+                o_shift += delta
+            elif adj_pos < orig_end:
+                l_shift += delta
+        e.offset += o_shift
+        e.length += l_shift
+
+    return new_text, entities
 
 
-def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]:
-    """Split text into chunks that fit Telegram's message limit.
-    Respects code block boundaries — never splits inside a ``` block.
-    Uses a conservative threshold (3600) to account for HTML tag expansion
-    when the chunks are later converted via markdown_to_html.
-    """
-    # Conservative limit: HTML tags like <b>, <code>, <a href="..."> expand length
-    effective_limit = min(max_length, 3600)
+def _safe_split(text, entities, max_len=TELEGRAM_MAX_LENGTH):
+    """Split text+entities into chunks without cutting through pre entities."""
+    utf16_len = len(text.encode("utf-16-le")) // 2
+    if utf16_len <= max_len:
+        return [(text, entities)]
 
-    if len(text) <= effective_limit:
-        return [text]
+    # Build protected ranges from "pre" entities (code blocks)
+    protected = []
+    for e in entities:
+        if e.type == "pre":
+            protected.append((e.offset, e.offset + e.length))
 
-    # Split by lines, group into chunks respecting code blocks
-    lines = text.split("\n")
+    # Find safe split points: positions of \n\n not inside protected ranges
+    split_candidates = []
+    utf16_pos = 0
+    for i, ch in enumerate(text):
+        if ch == "\n" and i + 1 < len(text) and text[i + 1] == "\n":
+            pos = utf16_pos + 1
+            inside_protected = any(
+                start <= pos < end for start, end in protected
+            )
+            if not inside_protected:
+                split_candidates.append((pos + 1, i + 2))
+        utf16_pos += 2 if ord(ch) > 0xFFFF else 1
+
+    # Greedy: find last split point that fits within max_len
     chunks = []
-    current_chunk = []
-    current_len = 0
-    in_code = False
+    chunk_utf16_starts = []
+    chunk_start_utf16 = 0
+    chunk_start_str = 0
+    last_good_utf16 = 0
+    last_good_str = 0
 
-    for line in lines:
-        line_len = len(line) + 1  # +1 for the \n
-
-        if line.strip().startswith("```"):
-            in_code = not in_code
-
-        # If adding this line would exceed limit and we're not in a code block
-        if current_len + line_len > effective_limit and not in_code and current_chunk:
-            chunks.append("\n".join(current_chunk))
-            current_chunk = []
-            current_len = 0
-
-        current_chunk.append(line)
-        current_len += line_len
-
-    if current_chunk:
-        chunks.append("\n".join(current_chunk))
-
-    # If any chunk still exceeds effective_limit (e.g. a huge code block), force-split it
-    final_chunks = []
-    for chunk in chunks:
-        if len(chunk) <= effective_limit:
-            final_chunks.append(chunk)
+    for utf16_pos, str_idx in split_candidates:
+        if utf16_pos - chunk_start_utf16 <= max_len:
+            last_good_utf16 = utf16_pos
+            last_good_str = str_idx
         else:
-            # Force split at line boundaries
-            sub_lines = chunk.split("\n")
-            sub_chunk = []
-            sub_len = 0
-            for line in sub_lines:
-                if sub_len + len(line) + 1 > effective_limit and sub_chunk:
-                    final_chunks.append("\n".join(sub_chunk))
-                    sub_chunk = []
-                    sub_len = 0
-                sub_chunk.append(line)
-                sub_len += len(line) + 1
-            if sub_chunk:
-                final_chunks.append("\n".join(sub_chunk))
+            if last_good_str > chunk_start_str:
+                chunk_text = text[chunk_start_str:last_good_str].rstrip("\n")
+                chunks.append(chunk_text)
+                chunk_utf16_starts.append(chunk_start_utf16)
+                chunk_start_utf16 = last_good_utf16
+                chunk_start_str = last_good_str
+                last_good_utf16 = utf16_pos
+                last_good_str = str_idx
+            else:
+                return split_entities(text, entities, max_utf16_len=max_len)
 
-    return final_chunks if final_chunks else [text]
+    # Remaining text
+    remaining = text[chunk_start_str:]
+    _lib_split_entities = []
+    if remaining.strip():
+        rem_utf16 = len(remaining.encode("utf-16-le")) // 2
+        if rem_utf16 > max_len:
+            # Filter entities for the remainder with adjusted offsets
+            rem_entities = []
+            for e in entities:
+                if e.offset >= chunk_start_utf16:
+                    rem_entities.append(MessageEntity(
+                        type=e.type,
+                        offset=e.offset - chunk_start_utf16,
+                        length=e.length,
+                        url=e.url,
+                        language=e.language,
+                    ))
+            last_chunks = split_entities(
+                remaining, rem_entities, max_utf16_len=max_len
+            )
+            for ct, ce in last_chunks:
+                chunks.append(ct)
+                chunk_utf16_starts.append(None)
+            _lib_split_entities = [ce for _, ce in last_chunks]
+        else:
+            chunks.append(remaining.rstrip("\n"))
+            chunk_utf16_starts.append(chunk_start_utf16)
+
+    if not chunks:
+        return split_entities(text, entities, max_utf16_len=max_len)
+
+    # Assign entities to chunks
+    result = []
+    lib_idx = 0
+    for idx, chunk_text in enumerate(chunks):
+        c_start = chunk_utf16_starts[idx]
+        if c_start is None:
+            chunk_ents = _lib_split_entities[lib_idx]
+            lib_idx += 1
+            result.append((chunk_text, chunk_ents))
+        else:
+            c_len = len(chunk_text.encode("utf-16-le")) // 2
+            c_end = c_start + c_len
+            chunk_ents = []
+            for e in entities:
+                if c_start <= e.offset < c_end:
+                    new_e = MessageEntity(
+                        type=e.type,
+                        offset=e.offset - c_start,
+                        length=min(e.length, c_len - (e.offset - c_start)),
+                        url=e.url,
+                        language=e.language,
+                    )
+                    chunk_ents.append(new_e)
+            result.append((chunk_text, chunk_ents))
+
+    # Strip pre entities from oversized chunks (graceful degradation)
+    final_result = []
+    for chunk_text, chunk_ents in result:
+        c_len = len(chunk_text.encode("utf-16-le")) // 2
+        if c_len > max_len:
+            chunk_ents = [e for e in chunk_ents if e.type != "pre"]
+        final_result.append((chunk_text, chunk_ents))
+
+    return final_result
+
+
+def _convert_entities(lib_entities):
+    """Convert telegramify-markdown MessageEntity to telegram.MessageEntity."""
+    result = []
+    for e in lib_entities:
+        kwargs = {
+            "type": e.type,
+            "offset": e.offset,
+            "length": e.length,
+        }
+        if e.url:
+            kwargs["url"] = e.url
+        if e.language:
+            kwargs["language"] = e.language
+        result.append(TgEntity(**kwargs))
+    return result
+
+
+def convert_for_preview(text):
+    """Convert markdown for streaming preview (no spacing adjustment)."""
+    plain_text, entities = telegramify_markdown.convert(text)
+    return plain_text, _convert_entities(entities)
+
+
+def split_message(text, max_len=TELEGRAM_MAX_LENGTH):
+    """Convert markdown to (plain_text, entities) chunks for Telegram."""
+    plain_text, entities = telegramify_markdown.convert(text)
+    plain_text, entities = _adjust_spacing(plain_text, entities)
+    plain_text, entities = _indent_numbered_items(plain_text, entities)
+    chunks = _safe_split(plain_text, entities, max_len=max_len)
+
+    result = []
+    for chunk_text, chunk_entities in chunks:
+        tg_entities = _convert_entities(chunk_entities)
+        result.append((chunk_text, tg_entities))
+
+    return result if result else [(plain_text, _convert_entities(entities))]
